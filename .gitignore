@@ -1,0 +1,34 @@
+# secrets
+.env
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+server/.venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# data + trained artifacts (regenerated)
+server/data/
+server/artifacts/
+ego4d/
+*.mp4
+*.npy
+*.npz
+*.pkl
+*.joblib
+*.sqlite
+*.db
+
+# node / expo
+node_modules/
+app/.expo/
+app/dist/
+app/web-build/
+*.log
+
+# os
+.DS_Store

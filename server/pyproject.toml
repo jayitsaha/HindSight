@@ -1,0 +1,38 @@
+[project]
+name = "hindsight"
+version = "0.1.0"
+description = "Egocentric object and action memory with calibrated recall"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "pillow",
+    "imageio",
+    "imageio-ffmpeg",
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "pydantic",
+    "python-multipart",
+    "websockets",
+    "torch",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+local = ["open-clip-torch"]  # local CLIP fallback (not needed when using NIM or on PACE)
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hindsight*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::RuntimeWarning",
+    "ignore:enable_nested_tensor:UserWarning",
+]

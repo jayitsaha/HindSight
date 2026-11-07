@@ -1,0 +1,19 @@
+numpy
+scipy
+scikit-learn
+pillow
+imageio
+imageio-ffmpeg
+fastapi
+uvicorn[standard]
+httpx
+pydantic
+python-multipart
+websockets
+pytest
+
+# torch powers the Ego4D benchmark trainers (hindsight.benchmarks) and the local
+# CLIP fallback encoder. On PACE install the CUDA wheel from pytorch.org.
+torch
+open-clip-torch
+

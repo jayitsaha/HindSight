@@ -1,0 +1,119 @@
+# Running HINDSIGHT on PACE (real Ego4D)
+
+Georgia Tech **PACE ICE**, SLURM scheduler, H100/H200 with ~8h job limits. This is
+the real-data path: download Ego4D's precomputed features + annotations to scratch,
+train the four benchmark heads on GPU, evaluate against the official splits. The
+foundation models are frozen (Ego4D ships their features) — the ML is the heads you
+train here.
+
+> Confirm with CS 7641 staff / `pace-check-queue -s`: `GTUSER`, `-A ACCOUNT`
+> (class allocation, often `gts-<pi>`), `-q QOS`, and the exact `--gres=gpu:<type>:1`.
+> Wrong account/partition is the #1 reason a job won't start.
+
+## 1. Access and layout
+
+```bash
+ssh GTUSER@login-ice.pace.gatech.edu            # GT VPN off-campus
+mkdir -p ~/scratch/hindsight/{ego4d,envs,runs,logs,ckpt}
+```
+
+Home is small and backed up (code, env). **Scratch** is large and NOT backed up —
+Ego4D features and checkpoints go there. Copy final artifacts off before the purge.
+
+## 2. Environment
+
+```bash
+module load anaconda3 cuda
+conda create -y -p ~/scratch/hindsight/envs/hs python=3.10
+conda activate ~/scratch/hindsight/envs/hs
+python -m pip install --upgrade pip
+# CUDA PyTorch wheel (match the cluster CUDA from `nvidia-smi`; cu121 is a safe default):
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+# the repo (code only; rsync it up first — see §6) + the Ego4D CLI:
+python -m pip install -e ~/scratch/hindsight/HINDSIGHT/server
+python -m pip install ego4d
+```
+
+Reactivate each session: `module load anaconda3 cuda && conda activate ~/scratch/hindsight/envs/hs`.
+
+## 3. Get Ego4D (license first, then download)
+
+1. Sign the license at <https://ego4d-data.org/docs/start-here/> and get your **AWS
+   access key / secret** from the approval email. Configure them:
+   ```bash
+   aws configure            # or export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+   ```
+2. Download only what the four benchmarks need, to scratch. The precomputed
+   **omnivore** video features are what ActionFormer/VSLNet train on — this is the
+   big one (plan for a few hundred GB; subset with `--video_uids` to start smaller):
+
+```bash
+export EGO4D_ROOT=~/scratch/hindsight/ego4d
+# annotations for all four benchmarks (~3 GB)
+ego4d --output_directory "$EGO4D_ROOT" --datasets annotations \
+      --benchmarks em fho --version v2 -y
+# precomputed clip features (omnivore_video_swinl): MQ + NLQ localization heads
+ego4d --output_directory "$EGO4D_ROOT" --datasets omnivore_video_swinl --version v2 -y
+# VQ2D needs the query-object frames; start with a subset of clips:
+ego4d --output_directory "$EGO4D_ROOT" --datasets clips --benchmarks vq2d --version v2 \
+      --video_uids $(head -40 docs/ego4d_vq2d_uids.txt) -y
+```
+
+Run the download in an sbatch job (it's long) — see `pace/scripts/download.sbatch`.
+Resulting layout the loaders expect:
+
+```
+$EGO4D_ROOT/v2/
+  annotations/{moments_train.json, nlq_train.json, vq_train.json, fho_oscc-pnr_train.json, ...}
+  omnivore_video_swinl/<clip_uid>.pt      # (T, 1536) per clip
+  clips/<video_uid>.mp4                    # only for VQ2D crops
+```
+
+## 4. Smoke-test, then train
+
+Everything runs on tiny random tensors with `--smoke` first (no data, CPU) so you
+catch bugs before burning GPU hours:
+
+```bash
+python -m hindsight.benchmarks.train mq --smoke        # 10 steps on fake features
+```
+
+Then submit the real jobs (each checkpoints every N steps and resumes, so an 8h
+wall limit is fine — resubmit with `--resume`):
+
+```bash
+sbatch pace/scripts/train_mq.sbatch        # action localization (MQ)
+sbatch pace/scripts/train_nlq.sbatch       # moment retrieval (NLQ)
+sbatch pace/scripts/train_pnr.sbatch       # put-down / state change (OSCC-PNR)
+sbatch pace/scripts/train_vq2d.sbatch      # visual query (VQ2D)
+```
+
+Monitor: `squeue --me -l` · `tail -f ~/scratch/hindsight/logs/mq-*.out` ·
+`srun --jobid JOBID --overlap --pty nvidia-smi`.
+
+## 5. Evaluate and collect
+
+```bash
+python -m hindsight.benchmarks.eval mq --checkpoint ~/scratch/hindsight/ckpt/mq/best.pt
+# writes runs/mq/metrics.json (official-style mAP etc.)
+```
+
+Pull results back to the laptop (§6) for the report.
+
+## 6. Move code up / results down
+
+```bash
+# from the LAPTOP. rsync only creates the final dir, not missing parents — make it first:
+ssh GTUSER@login-ice.pace.gatech.edu "mkdir -p ~/scratch/hindsight/HINDSIGHT"
+rsync -avP \
+  --exclude '.venv' --exclude '.git' --exclude 'node_modules' \
+  --exclude 'server/data' --exclude 'server/artifacts' \
+  --exclude '__pycache__' --exclude '*.pyc' --exclude '.expo' \
+  ~/Documents/COURSES/SEM1/ML/PROJECT/HINDSIGHT/ \
+  GTUSER@login-ice.pace.gatech.edu:~/scratch/hindsight/HINDSIGHT/
+scp GTUSER@login-ice.pace.gatech.edu:~/scratch/hindsight/runs/*/metrics.json ./results/
+```
+
+The app and `node_modules` stay on the laptop — PACE only runs the Python server.
+
+Never upload `.env` or AWS keys; keep secrets in `chmod 600` files read at runtime.
