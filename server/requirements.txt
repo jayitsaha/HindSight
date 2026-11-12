@@ -17,3 +17,9 @@ pytest
 torch
 open-clip-torch
 
+# frame curation (hindsight.video.curation, hindsight.curation)
+opencv-python-headless
+huggingface_hub
+pandas
+matplotlib
+tqdm

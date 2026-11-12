@@ -117,3 +117,29 @@ scp GTUSER@login-ice.pace.gatech.edu:~/scratch/hindsight/runs/*/metrics.json ./r
 The app and `node_modules` stay on the laptop — PACE only runs the Python server.
 
 Never upload `.env` or AWS keys; keep secrets in `chmod 600` files read at runtime.
+
+## 7. Frame curation on SuperMemory-VQA
+
+Writes KMeans and same-size uniform keyframe videos per session for the VLM stage (guide:
+[`FRAME_CURATION.md`](FRAME_CURATION.md)). No Ego4D license needed; videos download from Hugging Face.
+
+```bash
+# once: env + Hugging Face login (videos and CLIP weights cache on scratch)
+module load anaconda3 && conda activate ~/scratch/hindsight/env
+pip install -e "$HINDSIGHT_REPO/server[curation]"      # or: export PYTHONPATH=$HINDSIGHT_REPO/server
+export HF_HOME=~/scratch/hindsight/hf && hf auth login
+
+# pick sessions, submit one array task per session (run from the work dir)
+cd ~/scratch/hindsight
+python -m hindsight.curation.make_sessions --n 30 --per-person 3 --out sessions.txt
+mkdir -p logs && sbatch --array=0-$(( $(wc -l < sessions.txt) - 1 ))%10 "$HINDSIGHT_REPO/pace/scripts/curate_array.sbatch"
+squeue --me
+
+# when done (login node, no GPU): tables + graphs
+python -m hindsight.curation.analyze --out out --results results --k-bar 100
+```
+
+`HINDSIGHT_REPO` defaults to `~/scratch/hindsight/HindSight` in the sbatch script. Outputs go to
+`out/<session>/{kmeans,uniform}_K<k>.{mp4,json}`; embeddings cache in `cache/`. Request an NVIDIA GPU type
+explicitly (`--gres=gpu:l40s:1`, `v100`, `rtx_6000`): `mi210` and `r9700` are AMD. A 15.7-min session takes
+about 135 s for KMeans (embed at 1 fps) on an L40S; reading the 1408×1408 video dominates.

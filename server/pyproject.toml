@@ -17,11 +17,13 @@ dependencies = [
     "python-multipart",
     "websockets",
     "torch",
+    "opencv-python-headless",  # hindsight.video.curation (video read/write)
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
 local = ["open-clip-torch"]  # local CLIP fallback (not needed when using NIM or on PACE)
+curation = ["open-clip-torch", "huggingface_hub", "pandas", "matplotlib", "tqdm"]  # frame curation on SuperMemory-VQA
 
 [build-system]
 requires = ["setuptools>=68"]

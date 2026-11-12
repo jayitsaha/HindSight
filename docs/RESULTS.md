@@ -79,3 +79,35 @@ correctly and refuses every unanswerable one. On synthetic data the two are clea
 separable, so coverage is high; on real Ego4D NLQ, where the best systems find the
 right window 20–30% of the time, we'd expect far lower coverage at the same
 restraint — the mechanism is the contribution, not the headline coverage.
+
+## Frame curation on SuperMemory-VQA (real data, PACE)
+
+Keyframe selection for the VLM stage: `hindsight.video.curation` (guide: [FRAME_CURATION.md](FRAME_CURATION.md)),
+run with `pace/scripts/curate_array.sbatch`, scored with `python -m hindsight.curation.analyze`.
+
+**Setup.** 30 SuperMemory-VQA sessions (3 per participant, those with the most *Object & Location Memory* answer
+evidence). Frames sampled at 1 fps, embedded with CLIP ViT-B/32 (open_clip, laion2b), KMeans with K clusters,
+the frame nearest each centre kept and sorted by time. Baselines with the same K: uniform (evenly spaced) and
+random (mean of 20 seeds). L40S on PACE ICE.
+
+**Metric.** Evidence coverage: share of answer-evidence moments with at least one kept frame inside the
+evidence span (±2 s; frames after the question time don't count when the evidence is in the question's own session).
+Rephrased questions often share a span, so we report **unique moments** (266) as the main number; all
+503 question spans are in `results/curation/pace_30_sessions/coverage_summary.csv`.
+
+| K (frames kept) | Random | Uniform | KMeans |
+|---|---|---|---|
+| 32  | 36.2 | 45.9 | **46.6** |
+| 64  | 57.4 | **79.7** | 70.7 |
+| 100 | 71.7 | **90.6** | 80.8 |
+| 150 | 81.8 | **97.4** | 91.0 |
+
+KMeans beats random at every K and ties uniform at K = 32, but uniform wins as K grows. KMeans spends frames on
+visually distinct scenes; short moments inside long, similar-looking stretches (e.g. putting a phone down in
+the same room) merge into one cluster whose representative comes from another time. It uses neither the
+question nor recency, which motivates question-aware selection (CLIP top-K / supervised scorer) next.
+
+Caveats: coverage is measured only in the session holding the evidence (oracle session selection), and
+unanswerable questions have no evidence session. Figures: `results/curation/pace_30_sessions/`
+(`coverage_vs_K.png`, `coverage_by_session_K100.png`, `timelines/`, example `grids/`). The keyframe videos
+are on Hugging Face (private, team org).
