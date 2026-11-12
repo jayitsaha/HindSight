@@ -1,0 +1,25 @@
+{
+  "total_samples": 5,
+  "accuracy": 0.8,
+  "score_with_partial_credit": 0.8,
+  "abstention_accuracy": 0.0,
+  "answerable_accuracy": 1.0,
+  "hallucination_rate": 1.0,
+  "over_abstention_rate": 0.0,
+  "per_subject_accuracy": {
+    "S1": 1.0,
+    "S2": 0.5,
+    "S9": 1.0
+  },
+  "per_category_accuracy": {
+    "Object and Location Memory": 0.8
+  },
+  "confusion_matrix": {
+    "A": {
+      "A": 4
+    },
+    "D": {
+      "A": 1
+    }
+  }
+}
