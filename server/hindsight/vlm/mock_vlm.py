@@ -3,6 +3,7 @@ Deterministic Mock VLM for offline demonstration, testing, and CI.
 """
 
 from typing import Any, List, Optional, Union
+import math
 import time
 from PIL import Image
 
@@ -91,6 +92,13 @@ class MockVLM(BaseVLM):
             f'  "is_unanswerable": {str(is_unanswerable).lower()}\n}}'
         )
 
+        # deterministic pseudo log-probs: the chosen option gets most of the mass, how much varies by question
+        peak = 0.4 + 0.55 * ((hash(question.question_id) // 7) % 100) / 100
+        rest = (1 - peak) / max(1, len(choices) - 1)
+        option_logprobs = {question.get_choice_label(i): math.log(peak if i == chosen_idx else rest)
+                           for i in range(len(choices))}
+        n_frames = len(video_input) if isinstance(video_input, list) else 1
+
         elapsed = time.time() - start_time
         return VLMAnswerOutput(
             question_id=question.question_id,
@@ -101,5 +109,7 @@ class MockVLM(BaseVLM):
             abstain=is_unanswerable,
             confidence=0.92 if chosen_idx == gt_idx else 0.45,
             raw_model_response=simulated_raw,
-            latency_seconds=elapsed
+            latency_seconds=elapsed,
+            option_logprobs=option_logprobs,
+            n_frames=n_frames,
         )

@@ -144,6 +144,9 @@ def test_run_curated_and_blind_end_to_end(curated, qa_file, tmp_path):
     for d in ("cur", "blind"):
         m = json.load(open(tmp_path / d / "metrics.json"))
         assert m["total_samples"] == 2                     # question 2 dropped: session 9 not curated
+    raw = [json.loads(l) for l in open(tmp_path / "cur" / "raw_predictions.jsonl")]
+    assert all(set(r["option_logprobs"]) == {"A", "B", "C", "D"} for r in raw)   # input of the abstention classifier
+    assert {r["n_frames"] for r in raw} == {6, 2}            # q1: 4 + 2 frames before the cutoff; q3: own session
     cfg = json.load(open(tmp_path / "cur" / "run_config.json"))
     assert cfg["max_frames"] is None and cfg["n_questions"] == 2
     with pytest.raises(SystemExit):

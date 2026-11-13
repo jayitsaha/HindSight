@@ -209,3 +209,19 @@ sessions (`CUR_TASKS`), and the whole chain is 17 jobs. The script refuses to su
 earlier run are still queued (`FORCE=1` overrides). Settings (`KS`, `VLM_KS`, `IMAGE_TOKENS`,
 `CURATION_ENV`, `HINDSIGHT_ENV`, `MODEL`) are listed at the top of the script. One answer-evidence session isn't in
 the dataset repo, so the few questions that need it are never scored; the script prints its name.
+
+## 10. Abstention classifier (supervised, on Gemma's option log-probs)
+
+From the work dir of section 9 (it needs `out/`):
+
+```bash
+cd ~/scratch/hindsight && bash "$HINDSIGHT_REPO/pace/scripts/submit_abstention.sh"
+```
+
+Three Gemma jobs (curated KMeans, curated uniform, blind; K=100, the same settings as the full run) write
+`results/full/vlm/*_lp`, then `abstention.sbatch` trains and evaluates the classifier on all three. 4 jobs in all.
+A few minutes after the Gemma jobs start, `grep 'first option log-probs' logs/hs-lp-kmeans-*` should print a dict like
+`{'A': -2.1, 'B': -0.3, ...}`. A `WARNING: no option log-probs` line instead means the letter could not be located, so
+cancel and report it. Result: `results/full/abstention/ABSTENTION.md`; method in
+[VLM_PIPELINE.md](VLM_PIPELINE.md#abstention-classifier-hindsightevaluationabstention-supervised).
+

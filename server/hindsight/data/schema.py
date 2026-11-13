@@ -67,6 +67,10 @@ class VLMAnswerOutput:
     confidence: Optional[float] = None
     raw_model_response: str = ""
     latency_seconds: float = 0.0
+    # log-probability the model gave each option letter at the point it wrote "selected_choice"
+    # ({"A": -0.1, "B": -3.2, ...}); None when the backend cannot provide it. Input to the abstention classifier.
+    option_logprobs: Optional[Dict[str, float]] = None
+    n_frames: Optional[int] = None  # images the model actually saw
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -79,6 +83,8 @@ class VLMAnswerOutput:
             "confidence": self.confidence,
             "raw_model_response": self.raw_model_response,
             "latency_seconds": round(self.latency_seconds, 4),
+            "option_logprobs": self.option_logprobs,
+            "n_frames": self.n_frames,
         }
 
 

@@ -3,7 +3,9 @@ Open-Source Hugging Face VLM backend (Pixtral, SmolVLM, Llama-Vision, Idefics3, 
 Designed to run on HPC GPU clusters (PACE H100 / H200 / A100) or local CUDA environments.
 """
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+import math
+import re
 import time
 import os
 from PIL import Image
@@ -18,6 +20,40 @@ GEMMA4_TOKEN_BUDGETS = (70, 140, 280, 560, 1120)
 
 def _is_gemma4(name: str) -> bool:
     return "gemma-4" in name.lower() or "gemma4" in name.lower()
+
+
+_CHOICE_RE = re.compile(r'"selected_choice"\s*:\s*"?\s*([A-Z])')
+
+
+def option_logprobs_from_generation(tokenizer, gen_ids: Sequence[int], step_logprobs, n_options: int
+                                    ) -> Optional[Dict[str, float]]:
+    """Log-probability of each option letter at the step where the model wrote its "selected_choice" letter.
+
+    gen_ids: generated token ids (prompt removed). step_logprobs(i) -> log-softmax vector (indexable by token id)
+    for generation step i. The letter's token may carry neighbouring characters (e.g. '"C' or '▁C'), so the other
+    options are looked up as the same token piece with the letter swapped. None if the letter was never written
+    or a swapped piece is not a single token.
+    """
+    letters = [chr(ord("A") + i) for i in range(n_options)]
+    for i in range(len(gen_ids)):
+        m = _CHOICE_RE.search(tokenizer.decode(list(gen_ids[: i + 1]), skip_special_tokens=True))
+        if not m:
+            continue
+        piece = tokenizer.convert_ids_to_tokens(int(gen_ids[i]))
+        letter = m.group(1)
+        if not isinstance(piece, str) or letter not in piece:
+            return None
+        cut = piece.rindex(letter)
+        ids = []
+        for cand in letters:
+            tid = tokenizer.convert_tokens_to_ids(piece[:cut] + cand + piece[cut + 1:])
+            if tid is None or tid == getattr(tokenizer, "unk_token_id", None):
+                return None
+            ids.append(int(tid))
+        lp = step_logprobs(i)
+        out = {c: float(lp[t]) for c, t in zip(letters, ids)}
+        return out if all(math.isfinite(v) for v in out.values()) else None
+    return None
 
 
 class HuggingFaceVLM(BaseVLM):
@@ -298,16 +334,34 @@ class HuggingFaceVLM(BaseVLM):
         inputs = {k: v.to(self._model.device) for k, v in inputs.items() if hasattr(v, "to")}
 
         with torch.no_grad():
-            generated_ids = self._model.generate(
+            gen = self._model.generate(
                 **inputs,
                 max_new_tokens=kwargs.get("max_new_tokens", self.max_new_tokens),
                 do_sample=self.temperature > 0,
-                temperature=self.temperature if self.temperature > 0 else None
+                temperature=self.temperature if self.temperature > 0 else None,
+                return_dict_in_generate=True,
+                output_logits=True,   # raw per-step logits (before temperature) for the option log-probs
             )
+        generated_ids = gen.sequences
 
         # Trim input tokens
         input_len = inputs["input_ids"].shape[1] if "input_ids" in inputs else 0
         generated_ids_trimmed = generated_ids[:, input_len:]
+        option_lp = None
+        step_logits = getattr(gen, "logits", None) or getattr(gen, "scores", None)
+        if step_logits:
+            try:
+                option_lp = option_logprobs_from_generation(
+                    getattr(self._processor, "tokenizer", self._processor), generated_ids_trimmed[0].tolist(),
+                    lambda i: torch.log_softmax(step_logits[i][0].float(), dim=-1).cpu(), len(question.choices))
+            except Exception as e:  # never lose an answer over the log-probs
+                print(f"[HuggingFaceVLM] option log-probs failed for {question.question_id}: {e!r}")
+        if option_lp is not None and not getattr(self, "_logged_lp", False):
+            print(f"[HuggingFaceVLM] first option log-probs: {option_lp}")
+            self._logged_lp = True
+        if option_lp is None and not getattr(self, "_warned_lp", False):
+            print("[HuggingFaceVLM] WARNING: no option log-probs for this answer (logged once)")
+            self._warned_lp = True
         response_text = self._processor.batch_decode(
             generated_ids_trimmed,
             skip_special_tokens=True,
@@ -325,7 +379,9 @@ class HuggingFaceVLM(BaseVLM):
             predicted_text=text,
             reasoning=reasoning,
             abstain=abstain,
-            confidence=None,  # not calibrated yet; option log-probs would go here
+            confidence=None,  # calibrated decisions come from hindsight.evaluation.abstention
             raw_model_response=response_text,
-            latency_seconds=latency
+            latency_seconds=latency,
+            option_logprobs=option_lp,
+            n_frames=len(frames),
         )

@@ -68,8 +68,36 @@ Each run writes `metrics.json`, `eval_report.md`, `predictions.jsonl` (per-quest
 | answerability F1 (answerable, macro) | answer-vs-abstain as a binary decision |
 | vague / invalid rate | picked the vague option / output could not be parsed (scored wrong, never guessed) |
 
-`confidence` is `None` for now. Option log-probabilities would give a real score, and then the risk-coverage
-curve and AURC in `hindsight.metrics.selective` apply.
+`confidence` is `None`. The `hf` backend instead records `option_logprobs`: the log-probability of each option letter
+at the step where the model wrote `selected_choice` (no extra forward pass), plus `n_frames`. They feed the
+abstention classifier below.
+
+## Abstention classifier (`hindsight.evaluation.abstention`, supervised)
+
+Gemma over-abstains: it picks "can not be answered" on ~75% of answerable questions, yet is right ~70% of the time
+when it commits. The classifier learns when to answer instead of trusting that choice.
+
+- **Features** (from `option_logprobs` only): P(abstain option), best and second real option, margin, entropy,
+  log-odds best-vs-abstain, total letter mass, position of the abstain option, Gemma's own decision, question time.
+  No evidence or session-count features, since those would leak answerability through the oracle session choice.
+- **Label:** 1 if answering with Gemma's most likely real option is correct.
+- **Policy:** answer with that option if P(label = 1) ≥ τ, otherwise abstain.
+- **Model:** LogisticRegression on standardised features. It suits ~900 questions, gives probabilities a threshold
+  can act on, and its coefficients show which signals matter. Baseline: a tuned threshold on the log-odds alone
+  (one parameter, no learning), so any gain is due to the learned combination of features.
+- **Protocol:** leave-one-participant-out over the 10 participants. τ is tuned on the training participants only
+  (inner leave-one-participant-out), so every question gets one decision from a model that never saw its participant.
+- **Output:** `ABSTENTION.md` (the metrics above plus coverage, AURC, coverage at 80% selective accuracy, McNemar p
+  against Gemma's own choice, Gemma's QA-MRR), `abstention_results.json`, per-question decisions, risk-coverage plots.
+- **Control:** the blind run. If the classifier gains as much without frames, it is only learning option priors.
+
+```bash
+python -m hindsight.evaluation.abstention results/full/vlm/curated_kmeans_K100_lp results/full/vlm/curated_uniform_K100_lp \
+    results/full/vlm/blind_lp --out results/full/abstention
+```
+
+On PACE, `pace/scripts/submit_abstention.sh` reruns Gemma with log-probs on all three conditions and then the
+classifier (4 jobs, about 2 h).
 
 ## Python API
 
