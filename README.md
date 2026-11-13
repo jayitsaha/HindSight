@@ -65,6 +65,18 @@ Run it for real on GPU (Georgia Tech PACE, with 8h-limit checkpoint/resume) per
 [`docs/PACE.md`](docs/PACE.md); dataset loaders and the download in
 [`docs/EGO4D.md`](docs/EGO4D.md).
 
+## Frame curation (SuperMemory-VQA)
+
+The current real-data track: choose K keyframes from long egocentric sessions with **uniform sampling** or
+**CLIP + KMeans** (`hindsight.video.curation`), and feed them to a VLM. Batch runs on PACE with
+`hindsight.curation` + `pace/scripts/curate_array.sbatch`. Guide: [`docs/FRAME_CURATION.md`](docs/FRAME_CURATION.md),
+results: [`docs/RESULTS.md`](docs/RESULTS.md#frame-curation-on-supermemory-vqa-real-data-pace), notebooks: `notebooks/`.
+
+The curated frames then go to a VLM (Gemma 4 E4B), which answers the multiple-choice questions or abstains
+(`hindsight.vlm`, `hindsight.evaluation`). Conditions: curated (uniform / KMeans), blind (no frames) and oracle
+(frames at the evidence). Guide: [`docs/VLM_PIPELINE.md`](docs/VLM_PIPELINE.md); PACE jobs:
+`pace/scripts/vlm_eval.sbatch`, [`docs/PACE.md`](docs/PACE.md#8-vlm-evaluation-gemma-4-on-supermemory-vqa).
+
 ## Quick start
 
 ```bash
