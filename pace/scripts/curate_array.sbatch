@@ -17,7 +17,7 @@
 #SBATCH -N1 --ntasks-per-node=4 --mem=32G
 #SBATCH -t 2:00:00
 #SBATCH -o logs/%x-%A_%a.out
-set -euo pipefail
+set -uo pipefail
 REPO="${HINDSIGHT_REPO:-$HOME/scratch/hindsight/HindSight}"
 module load anaconda3
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -29,7 +29,18 @@ echo "== task ${SLURM_ARRAY_TASK_ID} on $(hostname) at $(date)"
 nvidia-smi --query-gpu=name --format=csv,noheader
 python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-python -m hindsight.curation.run_session --index "${SLURM_ARRAY_TASK_ID}" --sessions "${SESSIONS:-sessions.txt}" \
-  --ks 32 64 100 150 --delete-video
+# STRIDE=n: this task handles sessions TASK_ID, TASK_ID+n, TASK_ID+2n, ... (keeps the array small: ICE caps
+# submitted jobs per user and counts every array task). Unset = one session per task.
+SESSIONS="${SESSIONS:-sessions.txt}"
+N=$(grep -c . "$SESSIONS")
+STEP="${STRIDE:-$N}"
+FAILED=0
+for ((i = SLURM_ARRAY_TASK_ID; i < N; i += STEP)); do
+  echo "-- session line $i"
+  python -m hindsight.curation.run_session --index "$i" --sessions "$SESSIONS" \
+    --ks 32 64 100 150 --delete-video || { echo "!! session line $i failed"; FAILED=1; }
+  [ -n "${STRIDE:-}" ] || break
+done
+[ $FAILED -eq 0 ] || exit 1
 
 echo "== finished at $(date)"

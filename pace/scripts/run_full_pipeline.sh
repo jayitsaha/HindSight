@@ -20,9 +20,12 @@
 #   KS              K values to curate                   ["32 64 100 150"]
 #   VLM_KS          K values to evaluate with Gemma      ["100"]
 #   IMAGE_TOKENS    Gemma visual tokens per frame        [140]
-#   MAX_PARALLEL    curation tasks at once               [10]
+#   CUR_TASKS       curation array size; each task works through every CUR_TASKS-th session in turn [10]
+#                   (ICE caps submitted jobs per user and counts each array task, so keep the total small:
+#                   the whole chain is CUR_TASKS + 2 x (2 x #VLM_KS + 1) + 1 jobs, 17 by default)
 #   MODEL           VLM                                  [google/gemma-4-E4B-it]
 #   DRY_RUN=1       print the sbatch commands, submit nothing
+#   FORCE=1         submit even if hs-* jobs from an earlier run are still queued
 # Re-running the script is safe: finished sessions, K values and answered questions are skipped.
 # =====================================================================================================
 set -euo pipefail
@@ -34,7 +37,7 @@ VLM_ENV="${HINDSIGHT_ENV:-$HOME/scratch/hindsight/env-gemma4}"
 KS="${KS:-32 64 100 150}"
 VLM_KS="${VLM_KS:-100}"
 IMAGE_TOKENS="${IMAGE_TOKENS:-140}"
-MAX_PARALLEL="${MAX_PARALLEL:-10}"
+CUR_TASKS="${CUR_TASKS:-10}"
 MODEL="${MODEL:-google/gemma-4-E4B-it}"
 export HF_HOME="${HF_HOME:-$HOME/scratch/hindsight/hf}"
 export PYTHONPATH="$REPO/server${PYTHONPATH:+:$PYTHONPATH}"
@@ -48,6 +51,11 @@ submit() {   # prints the job id; in DRY_RUN prints the command and a fake id
 echo "== HindSight full pipeline | work dir $WORK | repo $REPO ($(git -C "$REPO" branch --show-current 2>/dev/null || echo '?'))"
 
 # ---------------------------------------------------------------- pre-flight (fail now, not at 3 am)
+if command -v squeue >/dev/null && [ -z "${FORCE:-}" ]; then
+    OLD=$(squeue --me -h -o "%i %j" | grep -E " hs-(curate|vlm|final)" || true)
+    [ -z "$OLD" ] || die "jobs from an earlier run are still queued (cancel them with scancel, or FORCE=1):
+$OLD"
+fi
 [ -d "$REPO/server/hindsight/evaluation" ] || die "$REPO has no hindsight.evaluation: git checkout frame-curation && git pull"
 [ -d "$CURATION_ENV" ] || die "curation env not found: $CURATION_ENV (set CURATION_ENV)"
 [ -d "$VLM_ENV" ] || die "Gemma 4 env not found: $VLM_ENV (docs/PACE.md section 8, or set HINDSIGHT_ENV)"
@@ -78,12 +86,14 @@ conda deactivate
 
 DEP=""
 if [ "$N" -gt 0 ]; then
-    CUR_ID=$(submit --array=0-$((N - 1))%"$MAX_PARALLEL" \
-        --export=ALL,SESSIONS=sessions_rest.txt,HINDSIGHT_REPO="$REPO",HINDSIGHT_ENV="$CURATION_ENV" \
+    T=$(( N < CUR_TASKS ? N : CUR_TASKS ))
+    # T tasks; task i curates session lines i, i+T, i+2T, ... (~N/T sessions each, a few minutes per session)
+    CUR_ID=$(submit --array=0-$((T - 1)) --time=8:00:00 \
+        --export=ALL,SESSIONS=sessions_rest.txt,STRIDE="$T",HINDSIGHT_REPO="$REPO",HINDSIGHT_ENV="$CURATION_ENV" \
         --job-name=hs-curate-rest "$S/curate_array.sbatch")
     # curate_array.sbatch runs --ks 32 64 100 150; KS only decides which sessions count as done
     DEP="--dependency=afterany:$CUR_ID"
-    echo "== [1] curation: $N sessions -> job $CUR_ID"
+    echo "== [1] curation: $N sessions in $T array tasks -> job $CUR_ID"
 else
     echo "== [1] curation: nothing left to do"
 fi

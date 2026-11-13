@@ -203,6 +203,9 @@ cat results/full/SUMMARY.md                                          # when it i
 ```
 
 Each step starts `afterany` the previous one, so one failed session doesn't block the rest. Running the script again
-skips finished sessions, finished K values and answered questions. Settings (`KS`, `VLM_KS`, `IMAGE_TOKENS`,
+skips finished sessions, finished K values and answered questions. ICE caps how many jobs a user can have
+submitted, and every array task counts. So curation uses 10 array tasks that each work through about 1/10 of the
+sessions (`CUR_TASKS`), and the whole chain is 17 jobs. The script refuses to submit while `hs-*` jobs from an
+earlier run are still queued (`FORCE=1` overrides). Settings (`KS`, `VLM_KS`, `IMAGE_TOKENS`,
 `CURATION_ENV`, `HINDSIGHT_ENV`, `MODEL`) are listed at the top of the script. One answer-evidence session isn't in
 the dataset repo, so the few questions that need it are never scored; the script prints its name.
