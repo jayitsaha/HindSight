@@ -143,3 +143,66 @@ python -m hindsight.curation.analyze --out out --results results --k-bar 100
 `out/<session>/{kmeans,uniform}_K<k>.{mp4,json}`; embeddings cache in `cache/`. Request an NVIDIA GPU type
 explicitly (`--gres=gpu:l40s:1`, `v100`, `rtx_6000`): `mi210` and `r9700` are AMD. A 15.7-min session takes
 about 135 s for KMeans (embed at 1 fps) on an L40S; reading the 1408×1408 video dominates.
+
+## 8. VLM evaluation (Gemma 4) on SuperMemory-VQA
+
+Answers Object & Location Memory questions from curated frames (guide: [`VLM_PIPELINE.md`](VLM_PIPELINE.md)).
+Gemma 4 needs Transformers 5, so it gets its own env, separate from the curation env.
+
+```bash
+# once: Gemma 4 env on scratch (CUDA 12.8 wheel; needs an NVIDIA GPU at run time)
+module load anaconda3
+export HF_HOME=~/scratch/hindsight/hf CONDA_PKGS_DIRS=~/scratch/hindsight/conda_pkgs PIP_CACHE_DIR=~/scratch/hindsight/pip_cache
+conda create --prefix ~/scratch/hindsight/env-gemma4 python=3.11 pip -y
+source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate ~/scratch/hindsight/env-gemma4
+export PYTHONNOUSERSITE=1
+pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+pip install "transformers>=5" accelerate av pillow pydantic opencv-python-headless huggingface_hub
+python -c 'from transformers import AutoProcessor, AutoModelForMultimodalLM; print("Gemma 4 imports OK")'
+
+# accept the model terms on huggingface.co while signed in, then download from the login node (~20 GB)
+hf auth login && hf download google/gemma-4-E4B-it
+
+# smoke test (synthetic video -> answer)
+HINDSIGHT_ENV=~/scratch/hindsight/env-gemma4 bash "$HINDSIGHT_REPO/pace/scripts/submit_vlm_smoke.sh" google/gemma-4-E4B-it
+
+# curated frames vs blind control (from the work dir); curated videos come from the HF dataset or out/
+cd ~/scratch/hindsight && mkdir -p logs
+CUR=hf:hindsight-cs7641/hindsight-curated-frames
+for M in kmeans uniform; do
+  sbatch "$HINDSIGHT_REPO/pace/scripts/vlm_eval.sbatch" --condition curated --curated-dir $CUR --method $M --k 100 --image-tokens 140
+done
+sbatch "$HINDSIGHT_REPO/pace/scripts/vlm_eval.sbatch" --condition blind --curated-dir $CUR --method kmeans --k 100
+python -m hindsight.evaluation.compare results/vlm/curated_kmeans_K100 results/vlm/curated_uniform_K100 results/vlm/blind
+
+# Veer's oracle pilot (40 Person_1 questions, frames cut around the evidence)
+HINDSIGHT_ENV=~/scratch/hindsight/env-gemma4 bash "$HINDSIGHT_REPO/pace/scripts/submit_pilot.sh"
+```
+
+On the 30 curated sessions, 600 questions qualify (455 answerable, 145 unanswerable), with up to 200 frames per
+question at K=100 (questions whose evidence spans two sessions). Gemma 4 E4B in bf16 is ~18 GB plus frames, so an
+L40S (48 GB) is enough. The first question logs `N frames -> T tokens`: check that T moves with `--image-tokens`.
+Keep the older SmolVLM env (`transformers==4.52.4`, `datasets==4.8.5`, CUDA 12.1 torch 2.5.1) separate if you still
+need it; Transformers 4 and 5 do not mix.
+
+## 9. Whole dataset in one go
+
+`pace/scripts/run_full_pipeline.sh` runs on the login node, from the work dir that holds `out/`. It checks the
+envs, the model cache and the questions file, then queues a chain of jobs:
+
+1. **Curation:** an array job over every session an Object & Location question needs that isn't already in `out/`.
+2. **Gemma 4:** curated KMeans, curated uniform and blind runs on every question whose sessions are curated. Each
+   run gets a continuation job that resumes if the first one hits the 8 h limit.
+3. **Finalize:** coverage over all sessions plus the VLM comparison, written to `results/full/SUMMARY.md`.
+
+```bash
+cd ~/scratch/hindsight
+DRY_RUN=1 bash "$HINDSIGHT_REPO/pace/scripts/run_full_pipeline.sh"   # pre-flight + print the sbatch commands
+bash "$HINDSIGHT_REPO/pace/scripts/run_full_pipeline.sh"             # queue everything
+cat results/full/SUMMARY.md                                          # when it is done
+```
+
+Each step starts `afterany` the previous one, so one failed session doesn't block the rest. Running the script again
+skips finished sessions, finished K values and answered questions. Settings (`KS`, `VLM_KS`, `IMAGE_TOKENS`,
+`CURATION_ENV`, `HINDSIGHT_ENV`, `MODEL`) are listed at the top of the script. One answer-evidence session isn't in
+the dataset repo, so the few questions that need it are never scored; the script prints its name.

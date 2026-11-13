@@ -24,6 +24,7 @@ dependencies = [
 dev = ["pytest"]
 local = ["open-clip-torch"]  # local CLIP fallback (not needed when using NIM or on PACE)
 curation = ["open-clip-torch", "huggingface_hub", "pandas", "matplotlib", "tqdm"]  # frame curation on SuperMemory-VQA
+vlm = ["transformers", "accelerate", "huggingface_hub", "av"]  # VLM answering + evaluation (Gemma 4 needs transformers>=5; see docs/PACE.md section 8)
 
 [build-system]
 requires = ["setuptools>=68"]

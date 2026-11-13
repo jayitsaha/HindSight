@@ -116,3 +116,31 @@ def test_coverage_hits():
     assert hits([15], spans, tol=0).tolist() == [True, False]
     assert hits([58], spans, tol=0).tolist() == [False, False]   # after the question time
     assert hits([22], spans, tol=2).tolist() == [True, False]    # within tolerance
+
+
+def test_make_sessions_all_skip_done(tmp_path, monkeypatch, capsys):
+    from hindsight.curation import make_sessions as ms
+
+    def rec(qid, prim, ev, answerable=True):
+        return {"question_id": qid, "subject": 1, "question": "where?", "is_answerable": answerable,
+                "metadata": {"skill": "object_location_memory", "primary_video_id": prim},
+                "question_evidence": {"time_spans": [{"start_time": 100, "end_time": 110}]},
+                "answer_evidence": {"evidence_list": [{"video_id": v, "time_span": {"start_time": 1, "end_time": 2}}
+                                                      for v in ev]}}
+    qa = [rec(1, "P_1_session_2", ["P_1_session_1", "P_1_session_2"]), rec(2, "P_1_session_3", [], answerable=False),
+          rec(3, "P_1_session_2", ["P_1_session_9"])]                       # session 9 is not in the repo
+    monkeypatch.setattr(ms, "load_qa", lambda path: qa)
+    monkeypatch.setattr(ms, "video_paths", lambda: {v: f"data/video/P_1/{v}.mp4" for v in
+                                                    ("P_1_session_1", "P_1_session_2", "P_1_session_3")})
+    out = tmp_path / "out"
+    for m in ("kmeans", "uniform"):                                         # session 1 already curated
+        for ext in ("mp4", "json"):
+            (out / "P_1_session_1").mkdir(parents=True, exist_ok=True)
+            (out / "P_1_session_1" / f"{m}_K100.{ext}").write_text("")
+    assert ms.is_done(str(out), "P_1_session_1", [100]) and not ms.is_done(str(out), "P_1_session_1", [32, 100])
+    sessions = tmp_path / "rest.txt"
+    monkeypatch.setattr("sys.argv", ["x", "--all", "--skip-done", str(out), "--ks", "100", "--out", str(sessions)])
+    ms.main()
+    vids = [line.split("\t")[1] for line in sessions.read_text().splitlines()]
+    assert sorted(vids) == ["P_1_session_2", "P_1_session_3"]             # session 3: only an unanswerable question
+    assert "P_1_session_9" in capsys.readouterr().out                     # reported as missing from the repo

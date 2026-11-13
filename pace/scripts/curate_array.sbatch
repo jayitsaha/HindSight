@@ -9,7 +9,7 @@
 # Then (login node, no GPU):
 #   python -m hindsight.curation.analyze --out out --results results --k-bar 100
 #
-# Set HINDSIGHT_REPO to your clone if it isn't ~/scratch/hindsight/HindSight.
+# Set HINDSIGHT_REPO to your clone if it isn't ~/scratch/hindsight/HindSight; SESSIONS to use another sessions file.
 # GPU: request an NVIDIA type explicitly; mi210 / r9700 are AMD and PyTorch would fall back to CPU.
 #SBATCH -J hs-curate
 #SBATCH -p ice-gpu
@@ -29,7 +29,7 @@ echo "== task ${SLURM_ARRAY_TASK_ID} on $(hostname) at $(date)"
 nvidia-smi --query-gpu=name --format=csv,noheader
 python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
-python -m hindsight.curation.run_session --index "${SLURM_ARRAY_TASK_ID}" --sessions sessions.txt \
+python -m hindsight.curation.run_session --index "${SLURM_ARRAY_TASK_ID}" --sessions "${SESSIONS:-sessions.txt}" \
   --ks 32 64 100 150 --delete-video
 
 echo "== finished at $(date)"

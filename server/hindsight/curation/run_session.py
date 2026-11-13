@@ -58,6 +58,9 @@ def main():
     print(f"{vid}: {info.duration / 60:.1f} min, {info.n_frames} frames @ {info.fps:.2f} fps", flush=True)
 
     for k in a.ks:
+        if all(os.path.isfile(os.path.join(out_dir, f"{m}_K{k}.json")) for m in ("kmeans", "uniform")):
+            print(f"  K={k}: already done, skipping", flush=True)   # resubmitted task: keep finished K
+            continue
         t = time.time()
         r = cur.curate(mp4, os.path.join(out_dir, f"kmeans_K{k}.mp4"), method="kmeans", k=k)
         u = cur.curate(mp4, os.path.join(out_dir, f"uniform_K{k}.mp4"), method="uniform", fps=k / info.duration)

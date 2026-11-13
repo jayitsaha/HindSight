@@ -23,3 +23,9 @@ huggingface_hub
 pandas
 matplotlib
 tqdm
+
+# VLM answering + evaluation (hindsight.vlm, hindsight.evaluation). Gemma 4 needs
+# transformers>=5 and its own env on PACE (docs/PACE.md section 8).
+transformers
+accelerate
+av
