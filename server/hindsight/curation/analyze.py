@@ -28,10 +28,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from hindsight.data.supermemory import evidence_rows, load_qa  # noqa: E402
 
-METHOD_ORDER = ["Random", "Uniform", "KMeans"]
-COLORS = {"Random": "#9aa0a6", "Uniform": "#1a73e8", "KMeans": "#e8710a"}
-STYLES = {"Random": ":", "Uniform": "--", "KMeans": "-"}   # distinct styles so tied lines stay visible
-MARKERS = {"Random": "s", "Uniform": "^", "KMeans": "o"}
+METHOD_ORDER = ["Random", "Uniform", "KMeans", "Temporal"]
+COLORS = {"Random": "#9aa0a6", "Uniform": "#1a73e8", "KMeans": "#e8710a", "Temporal": "#34a853"}
+STYLES = {"Random": ":", "Uniform": "--", "KMeans": "-", "Temporal": "-."}   # distinct styles so tied lines stay visible
+MARKERS = {"Random": "s", "Uniform": "^", "KMeans": "o", "Temporal": "D"}
 
 
 def hits(times, spans, tol):
@@ -43,12 +43,13 @@ def hits(times, spans, tol):
 def load_runs(out_dir):
     runs = []
     for f in sorted(glob.glob(os.path.join(out_dir, "*", "*_K*.json"))):
-        m = re.match(r"(kmeans|uniform)_K(\d+)\.json$", os.path.basename(f))
+        m = re.match(r"(kmeans|uniform|temporal)_K(\d+)\.json$", os.path.basename(f))
         if not m:
             continue
         man = json.load(open(f))
         runs.append(dict(video_id=os.path.basename(os.path.dirname(f)),
-                         method={"kmeans": "KMeans", "uniform": "Uniform"}[m.group(1)], K=int(m.group(2)),
+                         method={"kmeans": "KMeans", "uniform": "Uniform", "temporal": "Temporal"}[m.group(1)],
+                         K=int(m.group(2)),
                          times=[fr["t_sec"] for fr in man["frames"]],
                          duration=man["source"]["duration_s"], manifest=f,
                          video_path=os.path.join(os.path.dirname(f), os.path.basename(man["output"]["path"]))))
@@ -147,15 +148,16 @@ def main():
     for vid in d.index:
         km = next((r for r in runs if r["video_id"] == vid and r["method"] == "KMeans" and r["K"] == kb), None)
         un = next((r for r in runs if r["video_id"] == vid and r["method"] == "Uniform" and r["K"] == kb), None)
+        tm = next((r for r in runs if r["video_id"] == vid and r["method"] == "Temporal" and r["K"] == kb), None)
         e = ev[ev.video_id == vid]
-        fig, ax = plt.subplots(figsize=(12, 2.2))
+        fig, ax = plt.subplots(figsize=(12, 2.6))
         for s, en in set(zip(e.s, e.e)):
             ax.axvspan(s / 60, en / 60, color="#34a853", alpha=.3, lw=0)
-        for y, r, m in [(1, km, "KMeans"), (0, un, "Uniform")]:
+        for y, r, m in [(2, tm, "Temporal"), (1, km, "KMeans"), (0, un, "Uniform")]:
             if r:
                 ax.vlines(np.array(r["times"]) / 60, y - .35, y + .35, color=COLORS[m], lw=1)
-        ax.set_yticks([0, 1]); ax.set_yticklabels(["Uniform", "KMeans"]); ax.set_xlabel("minutes")
-        ax.set_xlim(0, (km or un)["duration"] / 60)
+        ax.set_yticks([0, 1, 2]); ax.set_yticklabels(["Uniform", "KMeans", "Temporal"]); ax.set_xlabel("minutes")
+        ax.set_xlim(0, (km or un or tm)["duration"] / 60)
         ax.set_title(f"{vid}: kept frames (K={kb}); green = answer-evidence spans")
         fig.tight_layout(); fig.savefig(os.path.join(a.results, "timelines", f"{vid}_K{kb}.png"), dpi=150); plt.close(fig)
 

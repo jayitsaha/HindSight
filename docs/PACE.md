@@ -225,3 +225,63 @@ A few minutes after the Gemma jobs start, `grep 'first option log-probs' logs/hs
 cancel and report it. Result: `results/full/abstention/ABSTENTION.md`; method in
 [VLM_PIPELINE.md](VLM_PIPELINE.md#abstention-classifier-hindsightevaluationabstention-supervised).
 
+## Post-midterm models (§4.1 temporal, §5.1 frame scorer, §5.3 stacking)
+
+Three new models on the `post-midterm` branch. All three run on **CPU** (no `--gres`) — the GPU
+work they build on (CLIP embeddings from curation §7/§9, Gemma `_lp` runs from §10) must already
+exist. Sync the branch up first (§6 rsync, or `git -C "$HINDSIGHT_REPO" checkout post-midterm && git pull`),
+then from the work dir that holds `out/` and `cache/`:
+
+```bash
+cd ~/scratch/hindsight
+DRY_RUN=1 bash "$HINDSIGHT_REPO/pace/scripts/run_post_midterm.sh"   # pre-flight + print the sbatch commands
+bash "$HINDSIGHT_REPO/pace/scripts/run_post_midterm.sh"             # queue everything
+```
+
+The driver submits (or you can submit each by hand):
+
+```bash
+sbatch "$HINDSIGHT_REPO/pace/scripts/temporal_coverage.sbatch"   # 1. hs-temporal
+sbatch "$HINDSIGHT_REPO/pace/scripts/frame_scorer.sbatch"        # 2. hs-scorer
+sbatch "$HINDSIGHT_REPO/pace/scripts/stacking.sbatch"            # 3. hs-stack
+```
+
+1. **Temporal clustering (§4.1), `hs-temporal`.** `run_session` now writes
+   `out/<vid>/temporal_K<k>.{mp4,json}` next to kmeans/uniform; the job loops over the sessions,
+   skips K values whose three manifests already exist, and reuses the CLIP embeddings in `cache/`
+   (re-curating is clustering + a video write pass; the mp4 is re-downloaded since curation ran
+   with `--delete-video`). It then runs
+   `python -m hindsight.curation.analyze --out out --results results/post_midterm/curation` —
+   the coverage table and `coverage_vs_K` plot now include the **Temporal** method.
+2. **Frame scorer (§5.1), `hs-scorer`.** `python -m hindsight.curation.frame_scorer eval
+   --cache cache --data data --model logreg` (set `SCORER_MODEL` to `mlp`/`gbm`). **Depends on the
+   curation embedding cache**: it scores the real sessions' cached CLIP frame embeddings from
+   `cache/` — on a cache miss it re-embeds on CPU (slow), so run curation first. The
+   per-participant AP table (base vs cosine vs scorer) prints to stdout and is tee'd to
+   `results/post_midterm/frame_scorer/eval_<model>.txt`.
+3. **Cross-view stacking (§5.3), `hs-stack`.**
+   `python -m hindsight.evaluation.stacking results/full/vlm/curated_kmeans_K100_lp
+   results/full/vlm/curated_uniform_K100_lp results/full/vlm/blind_lp --out results/post_midterm/stacking`.
+   **Depends on the `_lp` runs**: those `raw_predictions.jsonl` files with `option_logprobs` come
+   from `submit_abstention.sh`'s Gemma re-runs (GPU, §10). If the dirs are missing, the driver
+   chains `hs-stack` after any queued `hs-lp-*` jobs, or skips it with a warning — run
+   `bash "$HINDSIGHT_REPO/pace/scripts/submit_abstention.sh"` first, then re-run the driver.
+
+1 and 2 run in parallel as soon as the cache exists; the driver refuses to submit without
+`cache/*.npz` (`FORCE=1` overrides and accepts CPU re-embedding). Monitor with `squeue --me` and
+`tail -f logs/hs-temporal-* logs/hs-scorer-* logs/hs-stack-*`; job ids land in
+`results/post_midterm/jobs.txt`. Re-running the driver is safe: finished sessions and K values are
+skipped. The CPU jobs request no partition/`--gres`; if your ICE queue rejects that, use the same
+fallback as `abstention.sbatch` (`-p ice-gpu --gres=gpu:l40s:1`).
+
+Pull the results back to the laptop (from the laptop, as in §6):
+
+```bash
+rsync -avP GTUSER@login-ice.pace.gatech.edu:~/scratch/hindsight/results/post_midterm/ \
+  ~/Documents/COURSES/SEM1/ML/PROJECT/HINDSIGHT/results/post_midterm/
+```
+
+Key artifacts: `results/post_midterm/curation/coverage_summary.csv` (+ plots/timelines/grids),
+`results/post_midterm/frame_scorer/eval_<model>.txt`, and `results/post_midterm/stacking/STACKING.md`
+(+ `stacking_results.json`, `stacking_decisions.jsonl`).
+

@@ -1,0 +1,219 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+
+\definecolor{hsblue}{RGB}{30,80,140}
+\definecolor{hsgreen}{RGB}{30,120,70}
+\definecolor{hsred}{RGB}{160,40,40}
+\definecolor{hsgray}{RGB}{90,90,90}
+
+\titleformat{\section}{\large\bfseries\color{hsblue}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{hsblue}}{\thesubsection}{0.6em}{}
+
+\newcommand{\verdict}[2]{\par\smallskip\noindent\textbf{\color{#1}Verdict:} #2\par}
+\newcommand{\rec}{\textbf{\color{hsgreen}RECOMMEND}}
+\newcommand{\secmark}{\textbf{\color{hsblue}SECONDARY}}
+\newcommand{\rej}{\textbf{\color{hsred}REJECT}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\pagestyle{fancy}\fancyhf{}
+\rhead{\small\color{hsgray} HINDSIGHT --- Candidate Models \#3 and \#4}
+\lhead{\small\color{hsgray} CS 7641, Fall 2026}
+\cfoot{\thepage}
+
+\title{\vspace{-1.2cm}\textbf{HINDSIGHT: Research Plan for the Third and Fourth ML Models}\\[2pt]
+\large A vetted analysis of candidate unsupervised and supervised models,\\ with methodology, implementation strategy, and honest impact}
+\author{Prepared from a two-round, eight-agent research-and-review process\\ (four research memos per round, each adversarially verified)}
+\date{\today}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+\vspace{-0.6cm}
+
+\begin{abstract}
+\noindent The course requires four distinct ML models. HINDSIGHT already has two: an \emph{unsupervised} KMeans keyframe selector and a \emph{supervised} abstention logistic regression on the VLM's option log-probabilities. This document proposes the remaining two --- one unsupervised (\#3), one supervised (\#4) --- grounded in the committed full-run results, an empirical re-analysis of the dataset, and current literature. Every candidate was independently verified by an adversarial reviewer. The headline recommendations are a \textbf{supervised evidence-relevance frame scorer} (\#4) and, for \#3, a choice between a \textbf{recency-agnostic event/temporal clustering model} (safe, fixes a documented failure) and a \textbf{cross-session retrieval model} (attacks the real bottleneck the data exposes). A one-day gating experiment decides how much to invest in the supervised slot. Throughout, we are explicit about \emph{which metric} each idea can move, because the project's own results prove that perception --- not frame selection or calibration --- is the binding constraint.
+\end{abstract}
+
+\section{Context and the two existing models}
+HINDSIGHT answers SuperMemory-VQA ``Object \& Location Memory'' multiple-choice questions over long egocentric (smart-glasses) sessions. The pipeline is: sample a session at 1\,fps $\rightarrow$ embed frames with CLIP ViT-B/32 $\rightarrow$ select $K$ keyframes $\rightarrow$ feed them with the question to the VLM \textbf{Gemma-4-E4B}, which answers or abstains $\rightarrow$ a classifier decides when to trust the answer. The dataset is evaluated leave-one-participant-out (LOPO) over 10 participants, 924 scored questions (613 answerable, 311/320 unanswerable).
+
+\begin{itemize}[leftmargin=1.4em,topsep=2pt,itemsep=1pt]
+\item \textbf{Model \#1 (unsupervised):} KMeans over CLIP frame embeddings; keep one frame per cluster centroid.
+\item \textbf{Model \#2 (supervised):} Logistic regression on 14 features derived from Gemma's option log-probs; decides answer-vs-abstain; threshold tuned by inner LOPO.
+\end{itemize}
+
+\section{The empirical facts that constrain every candidate}
+These numbers are from the committed full run (\code{results/full/SUMMARY.md}, \code{results/full/abstention/}) and a fresh re-analysis of the dataset. They are the ground truth each proposal must respect.
+
+\begin{table}[h]\centering\small
+\caption{Frame selection --- unique evidence-moment coverage (\%) at each budget $K$.}
+\begin{tabular}{lcccc}
+\toprule
+$K$ & Random & Uniform & KMeans (\#1) \\
+\midrule
+32  & 36.7 & 47.3 & \textbf{44.4} \\
+64  & 57.6 & \textbf{78.4} & 68.6 \\
+100 & 72.2 & \textbf{90.9} & 79.7 \\
+150 & 82.2 & \textbf{96.6} & 92.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]\centering\small
+\caption{Answering with Gemma-4-E4B at $K{=}100$, and the supervised gate (LOPO) on the log-prob runs.}
+\begin{tabular}{lccc}
+\toprule
+ & KMeans frames & Uniform frames & Blind (no frames) \\
+\midrule
+QA accuracy & 38.6 & 38.0 & 34.1 \\
+Answerable accuracy & 10.8 & 9.5 & 0.0 \\
+Over-abstention rate & 74.9 & 76.0 & 100.0 \\
+Hallucination rate & 7.6 & 7.0 & 0.0 \\
+\midrule
+\multicolumn{4}{l}{\emph{Abstention gate, AURC (lower better) / answerability macro-F1:}}\\
+Gemma's own choice & \multicolumn{3}{l}{AURC 0.733} \\
+1-parameter threshold on log-odds & 0.695 / 62.0 & 0.703 / 59.3 & --- \\
+Logistic regression (\#2) & 0.711 / 56.1 & 0.708 / 59.3 & 0.717 / 50.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Four facts that drive the whole plan:}
+\begin{enumerate}[leftmargin=1.5em,topsep=2pt,itemsep=2pt]
+\item \textbf{Perception is the bottleneck, not selection.} Frames help (QA 38.6 vs 34.1 blind, $+4.5$ points) but the \emph{choice} of selection algorithm barely matters (KMeans $\approx$ uniform), and Gemma barely reads the frames: its best real option is correct on $\sim$202 questions with KMeans frames vs $\sim$197 with none. \emph{Coverage does not predict accuracy} --- uniform has \emph{more} coverage than KMeans yet near-identical or worse answers. No frame selector and no decision rule can add accuracy Gemma's perception does not produce.
+\item \textbf{Uniform, not KMeans, is the baseline to beat.} The existing ``smart'' model \#1 loses to trivial uniform sampling at $K\ge 64$.
+\item \textbf{The existing supervised model fails its bar.} Model \#2 does not beat a one-parameter threshold on the log-odds, and a blind (no-frames) control matches it (AURC 0.717 vs 0.711). Its features carry answer priors, not visual evidence. Coverage-at-80\%-selective-accuracy is \textbf{0\% on every run} --- there is no confident subset to rescue by reweighting.
+\item \textbf{The task is long-horizon and cross-session.} Fresh measurement of \code{all\_qa.json}: \textbf{88.9\%} of answerable questions have \emph{all} their evidence in an \emph{earlier} session (median 2 sessions back, up to 14); the ``just saw it'' ($<$30\,s) case is $\sim$0.3\%. The coverage metric above is computed only \emph{inside the oracle-chosen evidence session}, hiding the real problem: picking the right session out of the $\sim$20 each question lists.
+\end{enumerate}
+
+\section{Decision criteria (the bar every candidate must clear)}
+The eight reviews converged on four tests. A proposal is only worth building if it passes all four.
+\begin{enumerate}[leftmargin=1.5em,topsep=2pt,itemsep=1pt]
+\item \textbf{Is it a \emph{model}?} The course wants four distinct models. An optimizer (submodular selection), a similarity ranking (CLIP top-$K$), or non-parametric kNN retrieval \emph{fit no parameters} and read as ``heuristics,'' not models. KMeans is accepted because it fits centroids; a new unsupervised model should likewise \emph{fit structure to data}.
+\item \textbf{Distinctness.} It must differ from models \#1 and \#2 in label space, feature source, or hypothesis class --- not be ``model \#2 with different input features.''
+\item \textbf{Honest impact.} State \emph{which} metric it can move (coverage / retrieval AP / AURC / answerability-F1 / QA-Acc) given that perception is fixed. Pre-register likely nulls.
+\item \textbf{Beats its bar.} For a decision-side model, the bar is the one-parameter threshold \emph{and} the blind control. For a selection model, the bar is uniform.
+\end{enumerate}
+
+\section{Unsupervised slot (Model \#3)}
+
+\subsection{\rec\ (primary): Recency-agnostic event / temporal clustering at fixed $K$}
+\textbf{Description.} Replace flat KMeans with a clustering model that respects \emph{time}. KMeans groups frames by appearance and ignores \emph{when} they occur, so a short, important event (e.g.\ putting an object down) inside a long, similar-looking stretch collapses into one big cluster and loses its own frame. A time-aware model keeps each distinct event. Crucially, it operates on \emph{whatever frames the pipeline is handed} --- the live/recorded video the system is processing --- so it needs \emph{no} notion of ``sessions'' and fits the real-time scenario directly.
+
+\textbf{Which algorithm --- and why not HDBSCAN (key design point).} The pipeline must return \emph{exactly} $K$ frames (Gemma's $\sim$100-frame budget). \textbf{HDBSCAN cannot do this}: it is density-based, it \emph{chooses} the number of clusters itself and marks low-density frames as \emph{noise} --- you cannot ask it for exactly 100 clusters, so it does not fit a fixed budget. The existing KMeans works precisely because it \emph{takes $K$}; the new model must also take $K$ \emph{and} add the time-awareness KMeans lacks. The right tools:
+\begin{itemize}[leftmargin=1.3em,topsep=1pt,itemsep=1pt]
+\item \textbf{Temporally-constrained agglomerative clustering} (\code{sklearn AgglomerativeClustering}, \code{n\_clusters}$=K$, with a \code{connectivity} graph of temporal neighbours): bottom-up merging restricted to adjacent-in-time frames yields exactly $K$ contiguous events, one representative each. \emph{Recommended} --- distinct from KMeans (hierarchical + temporal constraint vs flat centroids) and it encodes the exact axis KMeans ignores.
+\item \textbf{$K$-segment change-point segmentation} (dynamic-programming / kernel change-point, e.g.\ \code{ruptures}): find $K{-}1$ optimal boundaries, keep one frame per segment --- a different paradigm, also exactly $K$.
+\item \textbf{TW-FINCH}: a temporally-weighted hierarchy cut at $K$ clusters.
+\end{itemize}
+GMM is possible but soft-KMeans-like (weaker distinctness, not time-aware). \textbf{Use temporally-constrained agglomerative clustering at \code{n\_clusters}$=100$.}
+
+\textbf{Crucial correction (from the data): drop recency weighting.} An earlier draft suggested weighting toward recent frames; the empirical analysis kills it. $88.9\%$ of answers are in an earlier recording, and even in the $11\%$ same-recording cases the median gap is 15 minutes with the ``just saw it'' case at $\sim$0.3\%. A recency prior would starve exactly the frames that matter. Use a uniform/recency-agnostic prior over events --- but keep the existing question-time cutoff (no future frames).
+
+\textbf{Methodology / implementation.} A new \code{@curation\_method} in the existing registry over the cached CLIP embeddings; evaluate on the existing coverage harness at $K\in\{8,16,32,64,100\}$. \textbf{The bar is uniform, not KMeans} (uniform already wins coverage at $K\ge 64$). Zero VLM changes, minutes of CPU.
+
+\textbf{Impact.} A genuine unsupervised \emph{model} (fits temporal structure to data), lowest effort, and a clean two-clustering-paradigms comparison (partitional KMeans vs temporally-constrained hierarchical). Honest limitation: like every selector here it is scored given the relevant video (oracle session); it is unlikely to move QA-Acc, but it can beat uniform on coverage and tells a crisp ``we fixed KMeans's documented failure mode'' story.
+
+\verdict{hsgreen}{Recommended as Model \#3. It fits the real-time ``process the video you're given'' scenario, needs no multi-session machinery, hits the fixed $K=100$ budget, and is a clearly distinct clustering model.}
+
+\subsection{Future work (not a model to build now): cross-session retrieval}
+In full deployment the assistant answers from its \emph{recorded memory}, and we measured that $88.9\%$ of answers live in an \emph{earlier} recording --- so a complete system must also pick \emph{which} past recording holds the answer (retrieval over the $\sim$20 candidates each question lists). The current pipeline runs on the video it is handed and the evaluation sidesteps this by being given the relevant recording (oracle session selection). Picking that recording is a well-posed unsupervised retrieval problem with ground truth in hand, and it is the honest real-world limitation to \emph{name} in the report --- but it is out of scope for the ``process the current video'' pipeline and is better left as future work than built as Model \#3.
+
+\subsection{\rej\ Submodular / query-aware (CLIP top-$K$, AKS, GCMI)}
+Strong coverage story and current SOTA, but submodular maximization is an \emph{optimizer} and CLIP top-$K$ is a similarity ranking --- neither fits parameters, so a grader may score them as heuristics, and they read as a KMeans re-skin. Keep as a labeled \emph{selection ablation}, not the model. (External $+4\%$ figures are on 4--12 frames with stronger VLMs; do not transfer to $K{=}100$ Gemma.)
+
+\subsection{\rej\ ASR / Audio-RAG}
+By the project's own philosophy (frozen encoders are not the ``model''), frozen-encoder $+$ FAISS kNN is plumbing. Worse: raw audio is \emph{withheld} (only redacted WhisperX transcripts ship, video folder removed), and audio evidence belongs to the \emph{Conversational Memory} skill --- not the Object \& Location task evaluated --- so it would move $\sim$nothing on-scope while adding hallucination risk. Worth at most a cheap ablation.
+
+\section{Supervised slot (Model \#4)}
+
+\subsection{\rec\ (primary): Supervised evidence-relevance frame scorer}
+\textbf{Description.} A classifier $s(\text{frame},\text{question})\to P(\text{frame is answer-evidence})$, trained with label $=1$ iff a frame's timestamp falls inside an answerable question's \code{answer\_evidence} span (before the cutoff). At inference it ranks frames and keeps the top-$M$ to feed Gemma --- the \emph{supervised} counterpart to the unsupervised KMeans selector.
+
+\textbf{Why it wins.} (i) Genuinely distinct --- it labels the \emph{frame} (not the answer), uses CLIP visual features, and acts \emph{before} Gemma, unlike the log-prob gate. (ii) It has an \textbf{intrinsic metric} (evidence-frame retrieval AP/PR-AUC) that \emph{guarantees} a result even if Gemma never improves --- and unlike the decision-side models, it \emph{can succeed}, because frame retrieval is a tractable supervised problem with real signal. (iii) No Gemma re-run. Both the supervised-slot reviewer and the hidden-state-probe reviewer independently ranked it the strongest \#4.
+
+\textbf{Methodology.} Features $[\,\text{frame emb},\ \text{question emb},\ \text{frame}\odot\text{question},\ |\text{frame}-\text{question}|\,]$ from CLIP; model = logistic regression / shallow MLP / GBM. Primary metric AP/PR-AUC (not AUROC --- most frames are negatives); baselines must include \textbf{zero-shot CLIP cosine} and the positive base rate, not just KMeans-centrality and uniform. LOPO \emph{by participant}.
+
+\textbf{Implementation strategy.} Per-question eval-time re-ranker over loaded frames (the first real consumer of \code{embed\_query}); reuse cached embeddings. If a downstream check is wanted, one Gemma re-run on the top-$M$ frames (same scale as the three runs already done).
+
+\textbf{Mandatory caveats (reviewers).} (1) \emph{Kill the candidate-pool leak}: draw candidate frames from the question's own session / full memory (\code{sessions="primary"}), \textbf{never} the oracle \code{"evidence"} choice. (2) Train/eval only on \code{is\_answerable} questions. (3) Keep $M$ near $K$ so an imperfect scorer cannot silently drop evidence the baseline already covered. (4) Pre-register that the downstream Gemma delta may be null or negative (perception ceiling; coverage does not predict accuracy); \emph{sell the intrinsic retrieval result.}
+
+\verdict{hsgreen}{The safest, most distinct supervised model that can actually post a win. Recommended as \#4.}
+
+\subsection{\secmark: Hidden-state MLP probe (``an MLP on the end of Gemma'')}
+\textbf{Description.} A trained head on Gemma's internal hidden states (not its output log-probs), testing the project's headline hypothesis directly: is the visual signal present in the residual stream even though greedy decoding discards it?
+
+\textbf{Reviewer-mandated form.} It must be an \emph{actual MLP} (a different model family from the logistic-regression gate) framed as a \textbf{mechanistic / interpretability probe} --- otherwise (as a linear PCA$\to$logistic on the same label/LOPO/policy) it is ``model \#2 with swapped features'' and \emph{not distinct}. Capture one vector via a forward \emph{hook on a single middle layer} (deeper layers re-inject language priors; final-layer $\approx$ as blind as log-probs). Nest the layer choice inside the training fold (the layer sweep is a live multiple-comparisons leak); add a random-label control.
+
+\textbf{Feasibility \& honesty.} Needs $\sim$3 fresh Gemma passes (activations were never saved); memory is fine via the single-layer hook. $d\approx2048$ vs $n\approx900$ ($\sim$202 positives) is fragile. The honest prior is a \textbf{null}: the one-parameter threshold already won on strictly \emph{less} information. ``Either result is a result'' is legitimate science but weak \emph{rubric} value (shipping a model you expect to tie).
+
+\verdict{hsblue}{Keep as a \emph{secondary interpretability experiment} (MLP, nested, controlled), not the graded \#4. Composes with the frame scorer (scorer picks frames $\to$ probe reads Gemma on them) but evaluate independently.}
+
+\subsection{\secmark: Cross-view stacking (ensembles done right)}
+\textbf{Description.} A meta-learner over multiple Gemma ``views'' (KMeans / uniform / blind, optionally a new $K$) using per-view log-prob features \emph{plus} cross-view \textbf{contrast} (curated$-$blind per-option deltas) and \textbf{agreement} (do views pick the same option; KL/JSD; vote entropy) features. The agreement/contrast signal is information no single run has --- and a blind-only ablation collapses those features to constants, giving a clean attribution of any gain to visual evidence.
+
+\textbf{Reviewer corrections.} (1) The log-probs are \emph{not} in the dirs first named --- they are in the uncommitted \code{*\_lp} runs; confirm those survive on PACE or budget a $\sim$4.5 GPU-h re-run. (2) ``Beats blind by construction'' is a \emph{fairness} guarantee, not a result guarantee: the entire curated-over-blind headroom is $\sim$0.006--0.009 AURC on 10 groups, all current $p$-values 0.07--0.42 (non-significant). (3) It is one learned layer on engineered features (frozen base runs), so call it that, not ``two-level stacking.'' (4) No stacking-leakage issue (bases are fixed), but fit scalers within-fold and regularize.
+
+\verdict{hsblue}{The cheapest, safest, \emph{least distinct} option; most likely a marginal/null result. Good as a nearly-free diagnostic add-on; pre-register the null. If novelty is the grading axis, prefer the frame scorer.}
+
+\subsection{\rej\ Conformal / cost-sensitive selective prediction}
+Not a distinct model --- it is model \#2 with a different threshold-selection rule. The ``certified hallucination cap'' also breaks under LOPO (exchangeability violated), and with coverage@80 $=0\%$ everywhere a tight cap certifies $\approx0\%$ coverage. \emph{Use conformal/cost-sensitive framing as a reporting layer on top of a distinct model, never as the model.}
+
+\subsection{Alternative: supervised answer verifier / re-ranker}
+A per-option scorer using CLIP option-text$\leftrightarrow$frame similarity that can \emph{re-rank} (override) Gemma's choice --- the only decision-side model that could move AURC \emph{and} accuracy. Genuinely distinct, but high risk: CLIP ViT-B/32 is weak on abstract option text and small egocentric objects. A fallback if the team wants a more ambitious \#4; gated by the same experiment below.
+
+\section{Anticipated questions and design justifications}
+Three questions a reviewer is likely to ask, with the defense the team should give.
+
+\subsection*{Q1. Why train an MLP/classifier over CLIP features for the frame scorer --- what does it learn that CLIP does not already give?}
+Zero-shot CLIP gives \emph{one} generic similarity, $\cos(\text{frame},\text{question})$, in a space trained on web image--caption pairs --- \emph{not} for ``is this frame the \emph{answer-evidence} for this egocentric memory question.'' The supervised scorer learns, from the real evidence labels, a \emph{task-specific, nonlinear} decision a single cosine cannot express:
+\begin{itemize}[leftmargin=1.3em,topsep=1pt,itemsep=1pt]
+\item \textbf{Interaction terms.} The features include the elementwise product $\text{frame}\odot\text{question}$ and $|\text{frame}-\text{question}|$; the head learns \emph{which} CLIP dimensions matter for evidence (e.g.\ object-identity dimensions), whereas a cosine averages all dimensions with equal weight.
+\item \textbf{Event vs presence.} ``Where did I \emph{put} X'' needs the frame of the \emph{placement}, not just any frame \emph{containing} X; the scorer can learn that from labels, cosine cannot.
+\item \textbf{Correcting CLIP's biases.} CLIP favours salient/photogenic frames; evidence frames are often mundane (an object on a counter). The scorer recalibrates toward evidence, away from CLIP saliency.
+\item \textbf{A calibrated decision, not a ranking.} It outputs $P(\text{evidence})$ with a learned threshold, giving precision/recall control a raw similarity has no notion of.
+\end{itemize}
+\emph{Honest test:} this is exactly why the mandated baseline is \textbf{zero-shot CLIP cosine} --- the scorer earns its place only if its AP beats that baseline, i.e.\ only if the supervised, nonlinear, task-calibrated mapping adds real signal over the generic one. Report both numbers.
+
+\subsection*{Q2. Why put an MLP on Gemma's hidden states (the probe) --- what does it learn beyond CLIP and beyond the existing log-prob gate?}
+The hidden state is \emph{neither} CLIP \emph{nor} the log-probs; it is Gemma's own representation \emph{after} it has jointly read all the frames, the question, and its chain-of-thought.
+\begin{itemize}[leftmargin=1.3em,topsep=1pt,itemsep=1pt]
+\item \textbf{Beyond CLIP:} CLIP embeds each frame \emph{independently and question-blind}. Gemma's hidden state is \emph{question-conditioned and integrated across frames} --- it reflects which frames Gemma attended to and whether it internally ``located'' the answer. That cross-frame, question-aware integration is information no per-frame CLIP vector contains.
+\item \textbf{Beyond the log-prob gate (Model \#2):} the 14 log-prob features are a \emph{lossy summary} of the final-layer distribution \emph{after} the projection to vocabulary. The hidden state is the full $\sim$2048-d representation \emph{before} that projection --- strictly more information, including visual-grounding directions the vocabulary projection discards. The literature shows correctness/answerability (and even raw visual content) is more decodable from hidden states than from outputs, precisely because generation squeezes everything through a narrow bottleneck.
+\item \textbf{What the MLP adds:} a \emph{nonlinear} readout of that high-dimensional representation, and a \emph{distinct model class} from the logistic-regression gate. It tests a concrete, falsifiable claim --- ``the visual signal survives in the residual stream even though greedy decoding threw it away.'' A win recovers signal the decoder discarded; a null sharpens the perception-bottleneck finding. Either is a result.
+\end{itemize}
+
+\subsection*{Q3. Can we use HDBSCAN for Model \#3, given we always feed exactly $K{=}100$ frames?}
+\textbf{No --- HDBSCAN is the wrong tool for a fixed frame budget.} HDBSCAN is density-based: it \emph{discovers} how many clusters exist and marks low-density frames as \emph{noise}. You cannot tell it ``give me exactly 100 clusters''; on one video it might return 25 dense clusters plus 1{,}500 noise frames, on another 400 tiny clusters --- neither yields a clean 100-frame budget. The existing KMeans works precisely because it \emph{takes $K$}. So the new model must also take $K$ \emph{and} add the time-awareness KMeans lacks: use \textbf{temporally-constrained agglomerative clustering} (\code{n\_clusters}$=100$, temporal-neighbour connectivity) or \textbf{$K$-segment change-point segmentation} --- both return exactly $K$ events, respect time, and are distinct model classes from KMeans. Reserve HDBSCAN for the opposite setting (``find however many natural events exist''), which is not our budgeted setting.
+
+\section{The one experiment that gates the supervised slot}
+Before building any decision-side model, run a \textbf{one-day ablation}: add CLIP question--frame similarity features to the \emph{existing} abstention logistic regression and compare curated-vs-blind AURC. Today blind (0.717) $\approx$ curated (0.711). \textbf{If visual features do not open a curated-vs-blind gap, no decision-side model} (probe, stacking, re-ranker, conformal) \textbf{can beat the bar} --- and the frame scorer's \emph{intrinsic} retrieval metric becomes the entire supervised deliverable. This single result tells you how much to invest.
+
+\section{Final recommendation and roadmap}
+\begin{table}[h]\centering\small
+\caption{Summary recommendation.}
+\begin{tabular}{p{2.3cm}p{5.2cm}p{6.5cm}}
+\toprule
+Slot & Model & Honest deliverable \\
+\midrule
+\textbf{\#3 Unsupervised} & Recency-agnostic temporal clustering at fixed $K$ (temporally-constrained agglomerative) \emph{(primary)}; cross-session retrieval \emph{(future work)} & Beat uniform on evidence coverage; a clean KMeans-vs-temporal-clustering comparison that fixes the documented failure mode \\
+\textbf{\#4 Supervised} & Evidence-relevance frame scorer \emph{(primary)}; hidden-state MLP probe + cross-view stacking \emph{(secondary)} & Evidence-frame retrieval AP/PR-AUC vs zero-shot CLIP; decision-side gains only if the gate experiment opens a gap \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Suggested order of work:} (1) the gating AURC ablation (1 day, decides the supervised slot); (2) the recency-agnostic temporal clustering model on the existing coverage harness (no GPU); (3) the frame scorer's intrinsic metric (no GPU); (4) optionally the hidden-state MLP probe and cross-view stacking as secondary results if GPU budget is free.
+
+\section{The honest framing for the final report}
+Lead with the diagnosis, not an overclaim. \textbf{Perception is the ceiling}; the four models are honest instruments around it: two clustering paradigms for \emph{where to look} (flat KMeans $\to$ temporally-constrained clustering), and two supervised models for \emph{what to trust} (answer-calibration gate $\to$ frame-relevance scorer, with the probe as a falsifiable test of whether the visual signal even survives into Gemma's activations). Sell each model on \emph{its own} metric (session recall, evidence-frame AP), pre-register the likely-flat QA-Acc, and report it straight. A pre-registered null that \emph{explains} the perception bottleneck is strong science; a promised accuracy jump that never materializes is not. The real levers for QA-Acc --- a stronger VLM, more visual tokens, the right modality --- sit outside the ``four models'' requirement and belong in the discussion as future work.
+
+\end{document}

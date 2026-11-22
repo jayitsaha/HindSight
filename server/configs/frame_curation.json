@@ -30,5 +30,20 @@
       "device": "auto",
       "batch_size": 64
     }
+  },
+  "temporal": {
+    "k": 32,
+    "embed_fps": 1.0,
+    "connectivity_neighbors": 2,
+    "linkage": "ward",
+    "output_fps": 1.0,
+    "cache_dir": null,
+    "embedder": {
+      "backend": "open_clip",
+      "model": "ViT-B-32",
+      "pretrained": "laion2b_s34b_b79k",
+      "device": "auto",
+      "batch_size": 64
+    }
   }
 }

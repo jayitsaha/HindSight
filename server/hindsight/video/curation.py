@@ -97,6 +97,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "batch_size": 64,
         },
     },
+    "temporal": {
+        "k": 32,
+        "embed_fps": 1.0,
+        "connectivity_neighbors": 2,
+        "linkage": "ward",
+        "output_fps": 1.0,
+        "cache_dir": None,
+        "embedder": {
+            "backend": "open_clip",
+            "model": "ViT-B-32",
+            "pretrained": "laion2b_s34b_b79k",
+            "device": "auto",
+            "batch_size": 64,
+        },
+    },
 }
 
 
@@ -213,6 +228,7 @@ class OpenClipEmbedder:
         self.device = _pick_device(device)
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(model, pretrained=pretrained)
         self.model = self.model.eval().to(self.device)
+        self.tokenizer = open_clip.get_tokenizer(model)
         self.batch_size = batch_size
         self.name = f"open_clip:{model}:{pretrained}"
 
@@ -221,6 +237,13 @@ class OpenClipEmbedder:
         x = torch.stack([self.preprocess(im) for im in images]).to(self.device)
         with torch.no_grad(), torch.autocast(device_type="cuda", enabled=(self.device == "cuda")):
             e = self.model.encode_image(x)
+        return e.float().cpu().numpy()
+
+    def embed_text(self, texts: List[str]) -> np.ndarray:
+        torch = self.torch
+        tok = self.tokenizer(texts).to(self.device)
+        with torch.no_grad(), torch.autocast(device_type="cuda", enabled=(self.device == "cuda")):
+            e = self.model.encode_text(tok)
         return e.float().cpu().numpy()
 
 
@@ -242,6 +265,13 @@ class HFEmbedder:
         inputs = self.processor(images=images, return_tensors="pt").to(self.device)
         with torch.no_grad(), torch.autocast(device_type="cuda", enabled=(self.device == "cuda")):
             e = self.model.get_image_features(**inputs)
+        return e.float().cpu().numpy()
+
+    def embed_text(self, texts: List[str]) -> np.ndarray:
+        torch = self.torch
+        inputs = self.processor(text=texts, return_tensors="pt", padding=True).to(self.device)
+        with torch.no_grad(), torch.autocast(device_type="cuda", enabled=(self.device == "cuda")):
+            e = self.model.get_text_features(**inputs)
         return e.float().cpu().numpy()
 
 
@@ -465,6 +495,14 @@ class FrameCurator:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             np.savez_compressed(cache_file, emb=emb, indices=indices)
         return emb
+
+    def embed_query(self, texts: List[str], emb_cfg: dict) -> np.ndarray:
+        """Embed question text with the same CLIP-style encoder used for frames (shared
+        space, so frame-vs-question cosine is meaningful). Used by query-aware methods."""
+        model = self.get_embedder(emb_cfg)
+        if not hasattr(model, "embed_text"):
+            raise NotImplementedError(f"embedder {model.name} has no text encoder")
+        return np.asarray(model.embed_text(list(texts)), dtype=np.float32)
 
     # ---- curation methods ----
     @curation_method("uniform")

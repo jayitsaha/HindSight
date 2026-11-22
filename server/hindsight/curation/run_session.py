@@ -12,7 +12,8 @@ import os
 import time
 from pathlib import Path
 
-from hindsight.video.curation import FrameCurator, probe_video
+from hindsight.video.curation import probe_video
+from hindsight.video.curation_temporal import TemporalCurator
 
 REPO_ID = "OSU-AIoT-MLSys-Lab/SuperMemory-VQA"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "frame_curation.json"
@@ -51,20 +52,23 @@ def main():
     out_dir = os.path.join(a.out, vid)
     os.makedirs(out_dir, exist_ok=True)
     overrides = {"kmeans.embed_fps": a.embed_fps, "kmeans.cache_dir": a.cache,
+                 "temporal.embed_fps": a.embed_fps, "temporal.cache_dir": a.cache,
                  "io.overlay_timestamp": not a.no_overlay,
                  "io.resize": (a.resize if a.resize[0] > 0 else None)}
-    cur = FrameCurator(a.config if os.path.exists(a.config) else None, **overrides)
+    cur = TemporalCurator(a.config if os.path.exists(a.config) else None, **overrides)
     info = probe_video(mp4)
     print(f"{vid}: {info.duration / 60:.1f} min, {info.n_frames} frames @ {info.fps:.2f} fps", flush=True)
 
     for k in a.ks:
-        if all(os.path.isfile(os.path.join(out_dir, f"{m}_K{k}.json")) for m in ("kmeans", "uniform")):
+        if all(os.path.isfile(os.path.join(out_dir, f"{m}_K{k}.json")) for m in ("kmeans", "uniform", "temporal")):
             print(f"  K={k}: already done, skipping", flush=True)   # resubmitted task: keep finished K
             continue
         t = time.time()
         r = cur.curate(mp4, os.path.join(out_dir, f"kmeans_K{k}.mp4"), method="kmeans", k=k)
+        tm = cur.curate(mp4, os.path.join(out_dir, f"temporal_K{k}.mp4"), method="temporal", k=k)
         u = cur.curate(mp4, os.path.join(out_dir, f"uniform_K{k}.mp4"), method="uniform", fps=k / info.duration)
-        print(f"  K={k}: kmeans {len(r.indices)} frames, uniform {len(u.indices)} frames ({time.time() - t:.0f}s)", flush=True)
+        print(f"  K={k}: kmeans {len(r.indices)} frames, temporal {len(tm.indices)} frames, "
+              f"uniform {len(u.indices)} frames ({time.time() - t:.0f}s)", flush=True)
 
     if a.delete_video and not a.video:
         os.remove(mp4)
