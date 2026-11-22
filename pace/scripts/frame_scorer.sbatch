@@ -35,7 +35,9 @@ mkdir -p "$OUT"
 [ -d cache ] || echo "WARNING: no cache/ in $(pwd) - every frame will be re-embedded on CPU (run curation first)"
 
 echo "== $(hostname) at $(date): frame scorer LOPO eval (model=$MODEL)"
-python -m hindsight.curation.frame_scorer eval --cache cache --data data --model "$MODEL" \
+# --delete-video: drop each session mp4 right after embedding so peak disk stays ~one video
+# (~3-5 GB) instead of accumulating every candidate session (~200+ GB). Embeddings persist in cache/.
+python -m hindsight.curation.frame_scorer eval --cache cache --data data --model "$MODEL" --delete-video \
   | tee "$OUT/eval_${MODEL}.txt"
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] || exit "$STATUS"

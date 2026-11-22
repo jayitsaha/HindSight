@@ -216,7 +216,8 @@ def load_real_questions(qa_path: Optional[str] = None) -> List[MemoryQuestion]:
 
 
 def build_real_store(questions: List[MemoryQuestion], cache_dir: str, data_dir: str,
-                     config: Optional[str] = None, embed_fps: float = 1.0) -> EmbeddingStore:
+                     config: Optional[str] = None, embed_fps: float = 1.0,
+                     delete_video: bool = False) -> EmbeddingStore:
     from huggingface_hub import hf_hub_download
     from hindsight.video.curation import FrameCurator, probe_video
 
@@ -234,13 +235,16 @@ def build_real_store(questions: List[MemoryQuestion], cache_dir: str, data_dir: 
     frames: Dict[str, SessionFrames] = {}
     for vid in needed:
         mp4 = os.path.join(data_dir, paths[vid])
-        if not os.path.exists(mp4):
+        downloaded = not os.path.exists(mp4)
+        if downloaded:
             from hindsight.data.supermemory import REPO_ID
             mp4 = hf_hub_download(REPO_ID, paths[vid], repo_type="dataset", local_dir=data_dir)
         info = probe_video(mp4)
         idx = cur._sample_indices(info, float(embed_fps))
         emb = cur.embed_frames(info, idx, emb_cfg, cache_dir)
         frames[vid] = SessionFrames(np.asarray(emb, dtype=np.float64), idx / info.fps)
+        if delete_video and downloaded and os.path.exists(mp4):
+            os.remove(mp4)
     queries: Dict[str, np.ndarray] = {}
     for q in questions:
         queries[q.qid] = cur.embed_query([q.text], emb_cfg)[0]
@@ -270,6 +274,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         sp.add_argument("--embed-fps", type=float, default=1.0)
         sp.add_argument("--model", default="logreg", choices=["logreg", "mlp", "gbm"])
         sp.add_argument("--max-questions", type=int, default=None)
+        sp.add_argument("--delete-video", action="store_true",
+                        help="delete each session mp4 right after embedding (peak disk stays ~one video)")
         if name == "train":
             sp.add_argument("--out", default="frame_scorer.joblib")
     a = ap.parse_args(argv)
@@ -277,7 +283,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     questions = load_real_questions(a.qa)
     if a.max_questions:
         questions = questions[:a.max_questions]
-    store = build_real_store(questions, a.cache, a.data, a.config, a.embed_fps)
+    store = build_real_store(questions, a.cache, a.data, a.config, a.embed_fps, a.delete_video)
 
     if a.cmd == "train":
         X, y, _ = build_rows(store, questions)
