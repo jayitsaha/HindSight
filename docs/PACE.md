@@ -247,3 +247,20 @@ all 1-fps frames or 100 uniform frames per session, over the evidence sessions (
 earlier session of that person, for X = 1, 2, 4, 8 and W = 15, 30 s, against random anchors. Result:
 `results/full/grounded/RECALL.md` (+ `recall.json`, `recall_vs_X.png`, and `windows.jsonl`: the anchors for every
 question, input for phase 2). If `cache/` is empty the embeddings were purged; rerun curation (section 9) first.
+
+## 12. Learned retriever (supervised, CPU only)
+
+A classifier that scores "is this frame answer evidence for this question?" from CLIP relevance, its shape over
+time (smoothed, local peaks), scene change and timing features (sessions back, minutes before the question), trained
+leave-one-participant-out with the benchmark's evidence spans as labels. Logistic regression and gradient-boosted trees
+are compared with zero-shot CLIP (section 11) and random anchors on recall@X, plus frame-ranking metrics (where the
+best evidence frame ranks). Run after section 11 (it reuses its text embeddings):
+
+```bash
+cd ~/scratch/hindsight && mkdir -p logs && sbatch "$HINDSIGHT_REPO/pace/scripts/retriever.sbatch"
+tail -f logs/hs-retriever-*.out
+```
+
+4 CPUs. If `ice-cpu` has no node with 4 free CPUs, check with `sinfo -p ice-cpu -t idle,mixed -N -o "%N %C %e"`.
+Result: `results/full/retriever/RETRIEVER.md` (+ `retriever.json`, `recall_vs_X.png`, `windows_<model>.jsonl`).
+Add `--sessions prior` for the realistic setting (all earlier sessions; slower, more frames per question).
