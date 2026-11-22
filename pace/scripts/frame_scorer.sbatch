@@ -1,19 +1,22 @@
 #!/bin/bash
 # Post-midterm section 5.1 — supervised evidence-relevance frame scorer, leave-one-participant-out eval.
 #
-# DEPENDS ON THE CURATION EMBEDDING CACHE: `frame_scorer eval` scores the real sessions' CLIP
-# frame embeddings, which it reads from the cache/ dir written by curate_array.sbatch /
-# run_full_pipeline.sh. Run curation first. On a cache miss it re-downloads the mp4 from
-# Hugging Face and re-embeds with CLIP on the CPU (slow); only the query-text embeddings are
-# always computed here (cheap on CPU).
+# Data: the SAME balanced ~25-session subset as temporal_coverage.sbatch (SESSIONS, shared by
+# run_post_midterm.sh). --sessions restricts the candidate pool to those video_ids so only ~25
+# sessions are touched, not all ~69. Each session's raw mp4 is downloaded, embedded at 1 fps and
+# deleted (--delete-video unless KEEP_VIDEO=1): peak disk ~one video (~3-5 GB). If cache/ already
+# holds a session's .npz (same file), the embed is reused; a fresh download re-embeds on CPU.
+# A warm cache from temporal_coverage.sbatch is only reused if KEEP_VIDEO=1 kept the mp4s (same
+# mtime); otherwise this job re-downloads+re-embeds the subset itself.
 #
 # `eval` prints the per-participant AP table (base rate vs cosine vs scorer) to stdout — there
 # is no --out flag — so stdout is tee'd into results/post_midterm/frame_scorer/.
 #
-# Submit FROM the work dir that holds cache/ (usually via run_post_midterm.sh):
+# Submit FROM your work dir (usually via run_post_midterm.sh):
 #   cd ~/scratch/hindsight && mkdir -p logs
 #   sbatch "$HINDSIGHT_REPO/pace/scripts/frame_scorer.sbatch"
-# Settings: HINDSIGHT_REPO, HINDSIGHT_ENV (curation env), SCORER_MODEL [logreg|mlp|gbm].
+# Settings: HINDSIGHT_REPO, HINDSIGHT_ENV (curation env), SCORER_MODEL [logreg|mlp|gbm],
+# SESSIONS [sessions_post_midterm.txt], N [25], PER [3], KEEP_VIDEO=1 (keep mp4s after embedding).
 #
 # CPU job: no --gres (PACE ICE CPU nodes need none). If your queue requires a partition, use
 # the same fallback as abstention.sbatch: -p ice-gpu --gres=gpu:l40s:1.
@@ -32,12 +35,17 @@ MODEL="${SCORER_MODEL:-logreg}"
 OUT=results/post_midterm/frame_scorer
 mkdir -p "$OUT"
 
-[ -d cache ] || echo "WARNING: no cache/ in $(pwd) - every frame will be re-embedded on CPU (run curation first)"
+SESSIONS="${SESSIONS:-sessions_post_midterm.txt}"
+N="${N:-25}"; PER="${PER:-3}"
+if [ ! -s "$SESSIONS" ]; then
+  python -m hindsight.curation.make_sessions --n "$N" --per-person "$PER" --out "$SESSIONS"
+fi
+DELETE="--delete-video"; [ -n "${KEEP_VIDEO:-}" ] && DELETE=""
 
-echo "== $(hostname) at $(date): frame scorer LOPO eval (model=$MODEL)"
-# --delete-video: drop each session mp4 right after embedding so peak disk stays ~one video
-# (~3-5 GB) instead of accumulating every candidate session (~200+ GB). Embeddings persist in cache/.
-python -m hindsight.curation.frame_scorer eval --cache cache --data data --model "$MODEL" --delete-video \
+echo "== $(hostname) at $(date): frame scorer LOPO eval (model=$MODEL, sessions=$SESSIONS)"
+# --sessions restricts to the subset; --delete-video keeps peak disk at ~one video (~3-5 GB).
+python -m hindsight.curation.frame_scorer eval --cache cache --data data --model "$MODEL" \
+  --sessions "$SESSIONS" $DELETE \
   | tee "$OUT/eval_${MODEL}.txt"
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] || exit "$STATUS"

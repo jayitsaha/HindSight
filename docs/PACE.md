@@ -227,10 +227,16 @@ cancel and report it. Result: `results/full/abstention/ABSTENTION.md`; method in
 
 ## Post-midterm models (§4.1 temporal, §5.1 frame scorer, §5.3 stacking)
 
-Three new models on the `post-midterm` branch. All three run on **CPU** (no `--gres`) — the GPU
-work they build on (CLIP embeddings from curation §7/§9, Gemma `_lp` runs from §10) must already
-exist. Sync the branch up first (§6 rsync, or `git -C "$HINDSIGHT_REPO" checkout post-midterm && git pull`),
-then from the work dir that holds `out/` and `cache/`:
+Three new models on the `post-midterm` branch. All three run on **CPU** (no `--gres`). Temporal
+and the frame scorer run on a **balanced ~25-session subset** (`make_sessions --n 25 --per-person 3`,
+evidence-ranked, ≤3 per participant so leave-one-participant-out still spans all 10) which is
+**downloaded fresh at 1 fps, one mp4 at a time, deleted after embedding** (peak disk ~5 GB, not the
+full 228 GB). They need **raw** frames — the 1.34 GB curated sample
+(`hf:hindsight-cs7641/hindsight-curated-frames`) is only the pre-selected keyframes, so it is the
+VLM `--curated-dir` and the kmeans/uniform baselines, **not** the input to a frame selector/scorer
+(feeding one selector another's output hides temporal's short-event advantage). Stacking builds on
+the Gemma `_lp` runs from §10. Sync the branch first (§6 rsync, or
+`git -C "$HINDSIGHT_REPO" checkout post-midterm && git pull`), then from your work dir:
 
 ```bash
 cd ~/scratch/hindsight
@@ -246,19 +252,20 @@ sbatch "$HINDSIGHT_REPO/pace/scripts/frame_scorer.sbatch"        # 2. hs-scorer
 sbatch "$HINDSIGHT_REPO/pace/scripts/stacking.sbatch"            # 3. hs-stack
 ```
 
-1. **Temporal clustering (§4.1), `hs-temporal`.** `run_session` now writes
-   `out/<vid>/temporal_K<k>.{mp4,json}` next to kmeans/uniform; the job loops over the sessions,
-   skips K values whose three manifests already exist, and reuses the CLIP embeddings in `cache/`
-   (re-curating is clustering + a video write pass; the mp4 is re-downloaded since curation ran
-   with `--delete-video`). It then runs
-   `python -m hindsight.curation.analyze --out out --results results/post_midterm/curation` —
-   the coverage table and `coverage_vs_K` plot now include the **Temporal** method.
+1. **Temporal clustering (§4.1), `hs-temporal`.** Builds the subset list, then for each session
+   downloads the raw mp4, embeds at 1 fps and writes `out/<vid>/{kmeans,temporal,uniform}_K<k>.{mp4,json}`
+   (all three from the same 1 fps pool, so the coverage comparison is fair), deleting the mp4 after
+   (`KEEP_VIDEO=1` to keep it). It skips K values whose three manifests already exist, then runs
+   `python -m hindsight.curation.analyze --out out --results results/post_midterm/curation` — the
+   coverage table and `coverage_vs_K` plot now include the **Temporal** method.
 2. **Frame scorer (§5.1), `hs-scorer`.** `python -m hindsight.curation.frame_scorer eval
-   --cache cache --data data --model logreg` (set `SCORER_MODEL` to `mlp`/`gbm`). **Depends on the
-   curation embedding cache**: it scores the real sessions' cached CLIP frame embeddings from
-   `cache/` — on a cache miss it re-embeds on CPU (slow), so run curation first. The
-   per-participant AP table (base vs cosine vs scorer) prints to stdout and is tee'd to
-   `results/post_midterm/frame_scorer/eval_<model>.txt`.
+   --cache cache --data data --model logreg --sessions <subset> --delete-video` (set `SCORER_MODEL`
+   to `mlp`/`gbm`). `--sessions` restricts the candidate pool to the subset's video_ids, so only
+   ~25 sessions are embedded (raw 1 fps, deleted after). The per-participant AP table (base vs
+   cosine vs scorer) prints to stdout and is tee'd to
+   `results/post_midterm/frame_scorer/eval_<model>.txt`. Because the embedding cache key includes
+   the mp4's mtime, this job re-downloads+re-embeds the subset itself unless `KEEP_VIDEO=1` kept the
+   temporal job's mp4s; that double download is the trade for ~5 GB peak disk.
 3. **Cross-view stacking (§5.3), `hs-stack`.**
    `python -m hindsight.evaluation.stacking results/full/vlm/curated_kmeans_K100_lp
    results/full/vlm/curated_uniform_K100_lp results/full/vlm/blind_lp --out results/post_midterm/stacking`.
@@ -267,8 +274,9 @@ sbatch "$HINDSIGHT_REPO/pace/scripts/stacking.sbatch"            # 3. hs-stack
    chains `hs-stack` after any queued `hs-lp-*` jobs, or skips it with a warning — run
    `bash "$HINDSIGHT_REPO/pace/scripts/submit_abstention.sh"` first, then re-run the driver.
 
-1 and 2 run in parallel as soon as the cache exists; the driver refuses to submit without
-`cache/*.npz` (`FORCE=1` overrides and accepts CPU re-embedding). Monitor with `squeue --me` and
+1 and 2 run in parallel (each downloads+embeds the shared subset itself; `KEEP_VIDEO=1` keeps the
+mp4s if you have ~70 GB and want one download instead of two). Tune the subset with `N`/`PER`. A
+warm `cache/` is reused when present but is no longer required. Monitor with `squeue --me` and
 `tail -f logs/hs-temporal-* logs/hs-scorer-* logs/hs-stack-*`; job ids land in
 `results/post_midterm/jobs.txt`. Re-running the driver is safe: finished sessions and K values are
 skipped. The CPU jobs request no partition/`--gres`; if your ICE queue rejects that, use the same

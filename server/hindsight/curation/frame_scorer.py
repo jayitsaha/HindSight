@@ -217,7 +217,7 @@ def load_real_questions(qa_path: Optional[str] = None) -> List[MemoryQuestion]:
 
 def build_real_store(questions: List[MemoryQuestion], cache_dir: str, data_dir: str,
                      config: Optional[str] = None, embed_fps: float = 1.0,
-                     delete_video: bool = False) -> EmbeddingStore:
+                     delete_video: bool = False, allow: Optional[set] = None) -> EmbeddingStore:
     from huggingface_hub import hf_hub_download
     from hindsight.video.curation import FrameCurator, probe_video
 
@@ -227,8 +227,12 @@ def build_real_store(questions: List[MemoryQuestion], cache_dir: str, data_dir: 
     emb_cfg = cur.config["kmeans"]["embedder"]
     paths = video_paths()
     candidates = sorted({v for q in questions for v in q.video_ids})
-    needed = [v for v in candidates if v in paths]
+    needed = [v for v in candidates if v in paths and (allow is None or v in allow)]
     missing = [v for v in candidates if v not in paths]
+    if allow is not None:
+        skipped = [v for v in candidates if v in paths and v not in allow]
+        print(f"session allowlist: embedding {len(needed)} of {len(candidates)} candidate sessions "
+              f"({len(skipped)} in-repo sessions outside the allowlist are skipped)")
     if missing:
         print(f"{len(missing)} of {len(candidates)} candidate video_ids have no path in "
               f"video_paths() and are skipped: {', '.join(missing)}")
@@ -276,14 +280,23 @@ def main(argv: Optional[List[str]] = None) -> None:
         sp.add_argument("--max-questions", type=int, default=None)
         sp.add_argument("--delete-video", action="store_true",
                         help="delete each session mp4 right after embedding (peak disk stays ~one video)")
+        sp.add_argument("--sessions", default=None,
+                        help="restrict candidate sessions to the video_ids in this sessions.txt (col 2)")
         if name == "train":
             sp.add_argument("--out", default="frame_scorer.joblib")
     a = ap.parse_args(argv)
 
+    allow = None
+    if a.sessions:
+        with open(a.sessions) as f:
+            allow = {line.split("\t")[1].strip() for line in f if line.strip() and "\t" in line}
+        if not allow:
+            raise SystemExit(f"--sessions {a.sessions} has no '<path>\\t<video_id>' lines")
+
     questions = load_real_questions(a.qa)
     if a.max_questions:
         questions = questions[:a.max_questions]
-    store = build_real_store(questions, a.cache, a.data, a.config, a.embed_fps, a.delete_video)
+    store = build_real_store(questions, a.cache, a.data, a.config, a.embed_fps, a.delete_video, allow)
 
     if a.cmd == "train":
         X, y, _ = build_rows(store, questions)

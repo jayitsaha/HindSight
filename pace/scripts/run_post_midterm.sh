@@ -4,20 +4,23 @@
 #
 #   cd ~/scratch/hindsight && bash "$HINDSIGHT_REPO/pace/scripts/run_post_midterm.sh"
 #
-# Run on the LOGIN node from your work dir (the one holding out/ and cache/ from the earlier
-# curation runs). All three jobs are CPU; the GPU work they depend on must already exist:
+# Run on the LOGIN node from your work dir. All three jobs are CPU:
 #
-#   1. hs-temporal  re-curates sessions so temporal_K<k> exists (CLIP embeddings reused from
-#                   cache/), then hindsight.curation.analyze -> results/post_midterm/curation
-#                   (coverage table now includes Temporal)
-#   2. hs-scorer    frame_scorer eval on the cached CLIP frame embeddings
+#   1. hs-temporal  downloads a balanced ~N-session subset (make_sessions), curates each raw
+#                   session at 1 fps (kmeans+temporal+uniform from the same pool) deleting the
+#                   mp4 after, then hindsight.curation.analyze -> results/post_midterm/curation
+#                   (coverage table including Temporal)
+#   2. hs-scorer    frame_scorer eval on the SAME subset (--sessions), raw 1 fps embeddings
 #                   -> results/post_midterm/frame_scorer/eval_<model>.txt
 #   3. hs-stack     hindsight.evaluation.stacking on the three _lp Gemma runs
 #                   -> results/post_midterm/stacking/STACKING.md
 #
-# 1 and 2 only need the curation embedding cache and run in parallel. 3 needs the
-# results/full/vlm/*_lp dirs from submit_abstention.sh (GPU Gemma re-runs): if they are missing
-# it is chained after any queued hs-lp-* jobs, or skipped with a warning.
+# 1 and 2 share one subset list and run in parallel (each downloads+embeds the subset itself,
+# one mp4 at a time, ~5 GB peak; KEEP_VIDEO=1 keeps the mp4s if you have ~70 GB and want to
+# avoid the double download). 3 needs results/full/vlm/*_lp from submit_abstention.sh (GPU Gemma
+# re-runs); if missing it is chained after any queued hs-lp-* jobs, or skipped with a warning.
+# The 1.34 GB curated sample (hf:hindsight-cs7641/hindsight-curated-frames) is the VLM input and
+# the kmeans/uniform baselines, NOT the input to temporal/scorer (those need raw 1 fps frames).
 #
 # Settings (environment variables, defaults in brackets):
 #   HINDSIGHT_REPO  clone on the post-midterm branch     [~/scratch/hindsight/HindSight]
@@ -25,8 +28,11 @@
 #   KS              K values for the temporal pass       ["32 64 100 150"]
 #   SCORER_MODEL    frame scorer model                   [logreg]  (logreg | mlp | gbm)
 #   K               K of the _lp runs for stacking       [100]
+#   N / PER         subset size / max sessions per person [25 / 3]
+#   SESSIONS        shared subset list                   [sessions_post_midterm.txt]
+#   KEEP_VIDEO=1    keep each mp4 after embedding (needs ~70 GB; avoids the double download)
 #   DRY_RUN=1       print the sbatch commands, submit nothing
-#   FORCE=1         submit even without cache/, or while hs-* post-midterm jobs are queued
+#   FORCE=1         submit while hs-* post-midterm jobs are still queued
 # Re-running is safe: finished sessions/K values are skipped; analyze and the evals just rerun.
 # =====================================================================================================
 set -euo pipefail
@@ -37,6 +43,8 @@ CURATION_ENV="${CURATION_ENV:-$HOME/scratch/hindsight/env}"
 KS="${KS:-32 64 100 150}"
 SCORER_MODEL="${SCORER_MODEL:-logreg}"
 K="${K:-100}"
+N="${N:-25}"; PER="${PER:-3}"
+SESSIONS="${SESSIONS:-sessions_post_midterm.txt}"
 export HF_HOME="${HF_HOME:-$HOME/scratch/hindsight/hf}"
 S="$REPO/pace/scripts"
 LP_DIRS=(results/full/vlm/curated_kmeans_K${K}_lp results/full/vlm/curated_uniform_K${K}_lp results/full/vlm/blind_lp)
@@ -59,12 +67,13 @@ fi
 grep -q '"temporal"' "$REPO/server/hindsight/curation/run_session.py" \
     || die "$REPO's run_session does not write temporal_K<k>: git -C $REPO checkout post-midterm && git pull"
 [ -d "$CURATION_ENV" ] || die "curation env not found: $CURATION_ENV (set CURATION_ENV)"
-[ -d out ] || die "run from the work dir that holds out/ (curated sessions)"
+mkdir -p out
+# cache/ is optional now: temporal + scorer run on a balanced ~25-session subset that is
+# downloaded fresh at 1 fps (one mp4 at a time, deleted after embedding, ~5 GB peak). A warm
+# cache/ only speeds things up; a cold cache just means CLIP embeds the subset on the CPU.
 if [ ! -d cache ] || [ -z "$(find cache -name '*.npz' 2>/dev/null | head -1)" ]; then
-    [ -n "${FORCE:-}" ] || die "no curation embedding cache in $WORK/cache - temporal and the frame scorer would
-re-embed every frame with CLIP on the CPU. Run curation first (curate_array.sbatch /
-run_full_pipeline.sh, docs/PACE.md sections 7 and 9), or FORCE=1 to accept the slow path."
-    echo "WARNING: cache/ is empty; proceeding because FORCE=1 (CPU re-embedding will be slow)"
+    echo "NOTE: no warm cache/ in $WORK - the ~$N-session subset will be downloaded from Hugging Face"
+    echo "      and embedded with CLIP (one mp4 at a time, deleted after; peak ~5 GB, but slow on CPU)."
 fi
 
 module load anaconda3 >/dev/null 2>&1 || true
@@ -74,17 +83,22 @@ python -c "import sklearn, open_clip, cv2, pandas, matplotlib" 2>/dev/null \
     || die "$CURATION_ENV is missing sklearn/open_clip/cv2/pandas/matplotlib"
 PYTHONPATH="$REPO/server" python -c "import hindsight.curation.frame_scorer, hindsight.evaluation.stacking" \
     || die "$REPO/server does not import (branch post-midterm?)"
+# One shared subset list so temporal and the frame scorer touch the SAME ~25 sessions.
+if [ ! -s "$SESSIONS" ]; then
+    PYTHONPATH="$REPO/server" python -m hindsight.curation.make_sessions --n "$N" --per-person "$PER" --out "$SESSIONS" \
+        || die "could not build the session subset (needs Hugging Face access for all_qa.json)"
+fi
+echo "== subset: $(wc -l < "$SESSIONS") sessions in $SESSIONS (<= $PER per participant)"
 conda deactivate
 mkdir -p logs results/post_midterm
 
 EXP=(--export=ALL,HINDSIGHT_REPO="$REPO",HINDSIGHT_ENV="$CURATION_ENV")
 
-# ---------------------------------------------------------------- 1 + 2: cache-dependent, in parallel
-T_ID=$(submit --export=ALL,HINDSIGHT_REPO="$REPO",HINDSIGHT_ENV="$CURATION_ENV",KS="$KS" \
-    "$S/temporal_coverage.sbatch")
+# ---------------------------------------------------------------- 1 + 2: subset runs, in parallel
+COMMON="HINDSIGHT_REPO=$REPO,HINDSIGHT_ENV=$CURATION_ENV,SESSIONS=$SESSIONS,N=$N,PER=$PER${KEEP_VIDEO:+,KEEP_VIDEO=$KEEP_VIDEO}"
+T_ID=$(submit --export=ALL,"$COMMON",KS="$KS" "$S/temporal_coverage.sbatch")
 echo "== [1] temporal coverage -> job $T_ID"
-F_ID=$(submit --export=ALL,HINDSIGHT_REPO="$REPO",HINDSIGHT_ENV="$CURATION_ENV",SCORER_MODEL="$SCORER_MODEL" \
-    "$S/frame_scorer.sbatch")
+F_ID=$(submit --export=ALL,"$COMMON",SCORER_MODEL="$SCORER_MODEL" "$S/frame_scorer.sbatch")
 echo "== [2] frame scorer ($SCORER_MODEL) -> job $F_ID"
 
 # ---------------------------------------------------------------- 3: stacking, needs the _lp Gemma runs
