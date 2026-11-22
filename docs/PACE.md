@@ -225,3 +225,23 @@ A few minutes after the Gemma jobs start, `grep 'first option log-probs' logs/hs
 cancel and report it. Result: `results/full/abstention/ABSTENTION.md`; method in
 [VLM_PIPELINE.md](VLM_PIPELINE.md#abstention-classifier-hindsightevaluationabstention-supervised).
 
+
+## 11. Question-grounded retrieval recall (phase 1, CPU only)
+
+How often do the X windows that CLIP picks for a question (anchor ± W s, on the cached 1-fps embeddings) contain
+the answer evidence? From the work dir of section 9, on the login node (no GPU, a few minutes; the first run downloads
+the CLIP text encoder into `$HF_HOME`):
+
+```bash
+cd ~/scratch/hindsight
+ls cache/*.npz | wc -l    # should be ~82: one embedding file per curated session
+module load anaconda3 && source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate ~/scratch/hindsight/env
+export HF_HOME=~/scratch/hindsight/hf PYTHONPATH="$HINDSIGHT_REPO/server"
+python -m hindsight.curation.grounded --cache cache --out out --results results/full/grounded
+```
+
+It compares three text queries (the full question, the object phrase pulled out of it, "a photo of <object>"), searching
+all 1-fps frames or 100 uniform frames per session, over the evidence sessions (as the curated Gemma runs) or every
+earlier session of that person, for X = 1, 2, 4, 8 and W = 15, 30 s, against random anchors. Result:
+`results/full/grounded/RECALL.md` (+ `recall.json`, `recall_vs_X.png`, and `windows.jsonl`: the anchors for every
+question, input for phase 2). If `cache/` is empty the embeddings were purged; rerun curation (section 9) first.
