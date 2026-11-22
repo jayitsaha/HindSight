@@ -102,3 +102,11 @@ def test_load_cache(tmp_path):
     (out / "Person_1_session_2_x" / "kmeans_K100.json").write_text(json.dumps({"source": {"fps": 30.0}}))
     v = gr.load_cache(str(cache), str(out))["Person_1_session_2_x"]
     assert v["t"].tolist() == [0.0, 1.0, 2.0] and np.allclose(np.linalg.norm(v["emb"], axis=1), 1)
+
+
+def test_text_cache_skips_encoding(tmp_path):
+    """Texts already in the cache are returned without loading open_clip."""
+    f = tmp_path / "text_emb.npz"
+    np.savez_compressed(f, texts=np.array(["a", "b"]), emb=np.eye(2, dtype=np.float32))
+    e = gr.encode_texts_open_clip(["b", "a", "b"], "ViT-B-32", "x", cache_file=str(f))
+    assert e.tolist() == [[0, 1], [1, 0], [0, 1]]

@@ -23,6 +23,7 @@ import glob
 import json
 import os
 import re
+import time
 from collections import defaultdict
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -226,19 +227,39 @@ def first_hit_rank(q: dict, anchors, w: float, tol: float) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------------------------- evaluation
-def encode_texts_open_clip(texts: List[str], model: str, pretrained: str, device: str = "cpu",
-                           batch_size: int = 256) -> np.ndarray:
-    import open_clip
-    import torch
-    m, _, _ = open_clip.create_model_and_transforms(model, pretrained=pretrained)
-    m = m.eval().to(device)
-    tok = open_clip.get_tokenizer(model)
-    out = []
-    with torch.no_grad():
-        for i in range(0, len(texts), batch_size):
-            out.append(m.encode_text(tok(texts[i:i + batch_size]).to(device)).float().cpu().numpy())
-    e = np.concatenate(out)
-    return e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-12)
+def encode_texts_open_clip(texts: List[str], model: str, pretrained: str, device: str = "auto",
+                           batch_size: int = 128, cache_file: Optional[str] = None) -> np.ndarray:
+    """CLIP text embeddings (L2-normalised). Texts already in `cache_file` are not re-encoded."""
+    cached: Dict[str, np.ndarray] = {}
+    if cache_file and os.path.exists(cache_file):
+        d = np.load(cache_file, allow_pickle=False)
+        cached = dict(zip(d["texts"].tolist(), d["emb"]))
+    todo = [t for t in dict.fromkeys(texts) if t not in cached]
+    print(f"text queries: {len(set(texts))} unique, {len(todo)} to encode", flush=True)
+    if todo:
+        import open_clip
+        import torch
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cpu":
+            torch.set_num_threads(int(os.environ.get("SLURM_CPUS_PER_TASK") or os.cpu_count() or 1))
+        print(f"loading CLIP text encoder {model}/{pretrained} on {device} ({torch.get_num_threads()} threads)", flush=True)
+        m, _, _ = open_clip.create_model_and_transforms(model, pretrained=pretrained)
+        m = m.eval().to(device)
+        tok = open_clip.get_tokenizer(model)
+        t0 = time.time()
+        with torch.no_grad():
+            for i in range(0, len(todo), batch_size):
+                batch = todo[i:i + batch_size]
+                e = m.encode_text(tok(batch).to(device)).float().cpu().numpy()
+                e /= np.linalg.norm(e, axis=1, keepdims=True) + 1e-12
+                cached.update(zip(batch, e))
+                print(f"  encoded {min(i + batch_size, len(todo))}/{len(todo)} ({time.time() - t0:.0f}s)", flush=True)
+        if cache_file:
+            os.makedirs(os.path.dirname(cache_file) or ".", exist_ok=True)
+            keys = list(cached)
+            np.savez_compressed(cache_file, texts=np.array(keys), emb=np.stack([cached[k] for k in keys]))
+    return np.stack([cached[t] for t in texts])
 
 
 def evaluate(questions: List[dict], videos: Dict[str, dict], encode: Callable[[List[str]], np.ndarray],
@@ -260,8 +281,10 @@ def evaluate(questions: List[dict], videos: Dict[str, dict], encode: Callable[[L
     missing = sum(any(v not in videos for v, _, _ in q["spans"]) for q in ans)
     info["answerable_with_uncached_evidence"] = missing
 
+    t0 = time.time()
     for mode in session_modes:
         for pool in pools:
+            print(f"scoring: sessions={mode}, frames={pool} ({time.time() - t0:.0f}s)", flush=True)
             cands = {q["qid"]: candidates(q, videos, sessions_for(q, videos, mode), pool) for q in questions}
             frames = [sum(len(t) for _, t, _ in cands[q["qid"]]) for q in questions]
             # random anchors (query-independent), shared across query types
@@ -378,18 +401,23 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--min-gap", type=float, default=60)
     ap.add_argument("--smooth", type=int, default=5, help="moving-average half-width in frames (pool=all)")
     ap.add_argument("--tol", type=float, default=2.0)
-    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--device", default="auto", help="for the CLIP text encoder: auto (GPU if available) | cpu | cuda")
+    ap.add_argument("--text-cache", default=None, help="text-embedding cache (default: <results>/text_emb.npz)")
     a = ap.parse_args(argv)
 
     questions = load_questions(load_qa(a.qa))
+    print(f"loading embeddings from {a.cache}/ ...", flush=True)
     videos = load_cache(a.cache, a.out)
     if not videos:
         raise SystemExit(f"No *.npz embeddings under {a.cache}")
     print(f"{len(questions)} questions, {len(videos)} cached sessions", flush=True)
-    enc = lambda texts: encode_texts_open_clip(texts, DEFAULT_EMBEDDER["model"], DEFAULT_EMBEDDER["pretrained"], a.device)
+    text_cache = a.text_cache or os.path.join(a.results, "text_emb.npz")
+    enc = lambda texts: encode_texts_open_clip(texts, DEFAULT_EMBEDDER["model"], DEFAULT_EMBEDDER["pretrained"],
+                                               a.device, cache_file=text_cache)
     rows, windows, info = evaluate(questions, videos, enc, xs=a.x, ws=a.window, queries=a.queries, pools=a.pools,
                                    session_modes=a.sessions, min_gap=a.min_gap, smooth_s=a.smooth, tol=a.tol)
     write_report(rows, windows, info, a.results)
+    print(f"done; wrote {a.results}/RECALL.md", flush=True)
     print(open(os.path.join(a.results, "RECALL.md")).read())
 
 

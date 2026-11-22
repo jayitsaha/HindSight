@@ -229,16 +229,18 @@ cancel and report it. Result: `results/full/abstention/ABSTENTION.md`; method in
 ## 11. Question-grounded retrieval recall (phase 1, CPU only)
 
 How often do the X windows that CLIP picks for a question (anchor ± W s, on the cached 1-fps embeddings) contain
-the answer evidence? From the work dir of section 9, on the login node (no GPU, a few minutes; the first run downloads
-the CLIP text encoder into `$HF_HOME`):
+the answer evidence? Run it as a CPU job: on a login node it gets killed (it encodes ~2,600 question texts with
+CLIP's text model, which takes 15+ minutes on the single core a login node allows). From the work dir of section 9:
 
 ```bash
-cd ~/scratch/hindsight
-ls cache/*.npz | wc -l    # should be ~82: one embedding file per curated session
-module load anaconda3 && source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate ~/scratch/hindsight/env
-export HF_HOME=~/scratch/hindsight/hf PYTHONPATH="$HINDSIGHT_REPO/server"
-python -m hindsight.curation.grounded --cache cache --out out --results results/full/grounded
+cd ~/scratch/hindsight && ls cache/*.npz | wc -l    # should be ~82: one embedding file per curated session
+mkdir -p logs && sbatch "$HINDSIGHT_REPO/pace/scripts/grounded.sbatch"
+tail -f logs/hs-grounded-*.out                       # progress: encoding, then one line per setting
 ```
+
+16 CPUs, a few minutes. The text embeddings are saved to `results/full/grounded/text_emb.npz`, so re-runs (other X, W
+or settings, passed as extra arguments to `sbatch`) skip encoding. If `ice-cpu` is busy, any partition works, including
+a GPU one (`--device auto` then encodes on the GPU in seconds).
 
 It compares three text queries (the full question, the object phrase pulled out of it, "a photo of <object>"), searching
 all 1-fps frames or 100 uniform frames per session, over the evidence sessions (as the curated Gemma runs) or every
