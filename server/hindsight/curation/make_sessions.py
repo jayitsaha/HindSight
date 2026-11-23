@@ -2,6 +2,7 @@
 
     python -m hindsight.curation.make_sessions --n 30 --per-person 3 --out sessions.txt
     python -m hindsight.curation.make_sessions --all --skip-done out --out sessions_rest.txt   # everything not yet curated
+    python -m hindsight.curation.make_sessions --all --skip-done out --ks 100 --methods agglomerative --out sessions_agglo.txt
 
 Sessions are ranked by how many object-question answer-evidence spans they contain. --all takes every session that
 an Object & Location question needs (answer evidence or the session the question is asked in) and that exists in the
@@ -15,10 +16,10 @@ import os
 from hindsight.data.supermemory import SKILL, evidence_rows, load_qa, video_paths
 
 
-def is_done(out_dir, vid, ks):
-    """True when out_dir/<vid>/ has the KMeans and uniform video + manifest for every K."""
+def is_done(out_dir, vid, ks, methods=("kmeans", "uniform")):
+    """True when out_dir/<vid>/ has the video + manifest of every method for every K."""
     return all(os.path.isfile(os.path.join(out_dir, vid, f"{m}_K{k}.{ext}"))
-               for k in ks for m in ("kmeans", "uniform") for ext in ("mp4", "json"))
+               for k in ks for m in methods for ext in ("mp4", "json"))
 
 
 def main():
@@ -30,6 +31,7 @@ def main():
     ap.add_argument("--all", action="store_true", help="every needed session (ignores --n / --per-person)")
     ap.add_argument("--skip-done", default=None, metavar="OUT_DIR", help="skip sessions already curated in OUT_DIR")
     ap.add_argument("--ks", type=int, nargs="+", default=[32, 64, 100, 150], help="K values a session must have to count as done")
+    ap.add_argument("--methods", nargs="+", default=["kmeans", "uniform"], help="methods a session must have to count as done")
     a = ap.parse_args()
 
     qa = load_qa(a.qa)
@@ -48,7 +50,7 @@ def main():
 
     chosen, per_person, skipped = [], collections.Counter(), 0
     for (vid, person), n in counts.most_common():
-        if a.skip_done and is_done(a.skip_done, vid, a.ks):
+        if a.skip_done and is_done(a.skip_done, vid, a.ks, a.methods):
             skipped += 1
             continue
         if not a.all and per_person[person] >= a.per_person:

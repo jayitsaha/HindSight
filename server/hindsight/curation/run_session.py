@@ -5,6 +5,7 @@ Run by run_array.sbatch with the Slurm array index (one session per task):
 
 Outputs (per session):  out/<video_id>/kmeans_K<k>.mp4 + .json
                         out/<video_id>/uniform_K<k>.mp4 + .json   (same number of frames as KMeans)
+                        out/<video_id>/agglomerative_K<k>.mp4 + .json   (with --methods agglomerative)
 Embeddings are cached in cache/, so each extra K only costs one write pass.
 """
 import argparse
@@ -25,6 +26,8 @@ def main():
     ap.add_argument("--video", help="process this local mp4 instead of a sessions.txt line")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
     ap.add_argument("--ks", type=int, nargs="+", default=[100])
+    ap.add_argument("--methods", nargs="+", default=["kmeans", "uniform"], choices=["kmeans", "uniform", "agglomerative"],
+                    help="curation methods to write (agglomerative = temporal agglomerative clustering)")
     ap.add_argument("--data", default="data", help="download folder")
     ap.add_argument("--out", default="out")
     ap.add_argument("--cache", default="cache")
@@ -58,13 +61,16 @@ def main():
     print(f"{vid}: {info.duration / 60:.1f} min, {info.n_frames} frames @ {info.fps:.2f} fps", flush=True)
 
     for k in a.ks:
-        if all(os.path.isfile(os.path.join(out_dir, f"{m}_K{k}.json")) for m in ("kmeans", "uniform")):
+        todo = [m for m in a.methods if not os.path.isfile(os.path.join(out_dir, f"{m}_K{k}.json"))]
+        if not todo:
             print(f"  K={k}: already done, skipping", flush=True)   # resubmitted task: keep finished K
             continue
-        t = time.time()
-        r = cur.curate(mp4, os.path.join(out_dir, f"kmeans_K{k}.mp4"), method="kmeans", k=k)
-        u = cur.curate(mp4, os.path.join(out_dir, f"uniform_K{k}.mp4"), method="uniform", fps=k / info.duration)
-        print(f"  K={k}: kmeans {len(r.indices)} frames, uniform {len(u.indices)} frames ({time.time() - t:.0f}s)", flush=True)
+        t, done = time.time(), []
+        for m in todo:
+            params = {"fps": k / info.duration} if m == "uniform" else {"k": k}
+            r = cur.curate(mp4, os.path.join(out_dir, f"{m}_K{k}.mp4"), method=m, **params)
+            done.append(f"{m} {len(r.indices)} frames")
+        print(f"  K={k}: {', '.join(done)} ({time.time() - t:.0f}s)", flush=True)
 
     if a.delete_video and not a.video:
         os.remove(mp4)

@@ -282,3 +282,31 @@ tail -f logs/hs-selectors-*.out
 
 Result: `results/full/selectors/SELECTORS.md` (+ `selectors.json` and `selections_<selector>.jsonl`, the chosen
 frames for every question, input for a Gemma run on the winning selector).
+
+## 14. Temporal agglomerative frames, then Gemma
+
+Temporal agglomerative clustering covered the most evidence of the question-agnostic selectors in section 13 (89.5% of
+spans at K=100, against 79.3% for KMeans). This curates it for every session and runs Gemma on it, with the same
+settings as the KMeans/uniform runs. From the work dir of the full run, on the login node:
+
+```bash
+cd ~/scratch/hindsight && git -C "$HINDSIGHT_REPO" pull
+bash "$HINDSIGHT_REPO/pace/scripts/submit_agglomerative.sh"          # DRY_RUN=1 first to see the sbatch commands
+squeue --me
+tail -f logs/hs-curate-agglo-*.out                                    # one block per session
+```
+
+1. **Curation** (array job, 10 tasks on L40S like the full run): each session video is downloaded again (they were
+   deleted after the first curation), `out/<video>/agglomerative_K100.mp4` + `.json` are written, and the video is
+   deleted. The CLIP embeddings come from `cache/`: the log says `Reusing cached embeddings` (the cache key of the
+   re-downloaded file differs, the frames are the same). If it says `embed` with a progress bar instead, the cache was
+   not found and the frames are embedded again (slower, still correct).
+2. **Gemma** starts when curation ends: `results/full/vlm/curated_agglomerative_K100/` (+ a continuation job that resumes
+   if it hits the 8 h limit).
+
+Compare with the earlier runs:
+
+```bash
+python -m hindsight.evaluation.compare results/full/vlm/curated_kmeans_K100 results/full/vlm/curated_uniform_K100 \
+    results/full/vlm/curated_agglomerative_K100 results/full/vlm/blind
+```

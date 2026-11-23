@@ -144,3 +144,67 @@ def test_make_sessions_all_skip_done(tmp_path, monkeypatch, capsys):
     vids = [line.split("\t")[1] for line in sessions.read_text().splitlines()]
     assert sorted(vids) == ["P_1_session_2", "P_1_session_3"]             # session 3: only an unanswerable question
     assert "P_1_session_9" in capsys.readouterr().out                     # reported as missing from the repo
+
+
+def _returning_video(tmp_path):
+    """Scene A, B, then A again (4 s each): KMeans-style clustering merges the two A stretches, temporal
+    agglomerative clustering must not."""
+    path = tmp_path / "aba.mp4"
+    colours = [(30, 30, 200), (30, 200, 30), (30, 30, 200)]
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (64, 64))
+    for i in range(FPS * SECONDS):
+        vw.write(np.full((64, 64, 3), colours[i // (FPS * SECONDS // 3)], np.uint8))
+    vw.release()
+    return str(path)
+
+
+def test_agglomerative_temporal_keeps_returning_scene(tmp_path):
+    path = _returning_video(tmp_path)
+    cur = FrameCurator({"kmeans": {"embedder": {"backend": "toy"}, "embed_fps": 2.0}})
+    res = cur.curate(path, str(tmp_path / "a.mp4"), method="agglomerative", k=3)
+    stretch = (res.timestamps // (SECONDS / 3)).astype(int)
+    assert sorted(stretch.tolist()) == [0, 1, 2]                  # one frame per contiguous stretch, A twice
+    frames = json.load(open(res.manifest))["frames"]
+    assert all(f["cluster_t_max"] - f["cluster_t_min"] < SECONDS / 3 for f in frames)   # clusters are contiguous
+    assert sum(f["cluster_size"] for f in frames) == 2 * SECONDS
+    assert json.load(open(res.manifest))["extra"]["temporal"] is True
+
+
+def test_agglomerative_reuses_cache_from_another_file_key(tmp_path):
+    """A re-downloaded video has a new mtime, so its cache key changes; the embeddings are still reused."""
+    path = _returning_video(tmp_path)
+    cache = tmp_path / "cache"
+    cfg = {"kmeans": {"embedder": {"backend": "toy"}, "embed_fps": 2.0, "cache_dir": str(cache)}}
+    FrameCurator(cfg).curate(path, str(tmp_path / "k.mp4"), method="kmeans", k=3)
+    first = list(cache.glob("*.npz"))
+    assert len(first) == 1
+    import os
+    os.utime(path, (1, 1))                                        # same frames, different key
+
+    class Boom:
+        name = "boom"
+
+        def __init__(self, **_):
+            pass
+
+        def embed(self, images):
+            raise AssertionError("should have reused the cached embeddings")
+
+    curation.EMBEDDERS["boom"] = Boom
+    try:
+        cfg2 = {"kmeans": {"embedder": {"backend": "boom"}, "embed_fps": 2.0, "cache_dir": str(cache)}}
+        res = FrameCurator(cfg2).curate(path, str(tmp_path / "a.mp4"), method="agglomerative", k=3)
+    finally:
+        del curation.EMBEDDERS["boom"]
+    assert len(res.indices) == 3
+
+
+def test_make_sessions_methods(tmp_path):
+    from hindsight.curation import make_sessions as ms
+    d = tmp_path / "v"
+    d.mkdir()
+    for ext in ("mp4", "json"):
+        (d / f"kmeans_K100.{ext}").write_text("")
+        (d / f"uniform_K100.{ext}").write_text("")
+    assert ms.is_done(str(tmp_path), "v", [100])
+    assert not ms.is_done(str(tmp_path), "v", [100], ["agglomerative"])

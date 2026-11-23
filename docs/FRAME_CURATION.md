@@ -187,6 +187,30 @@ Examples:
 
 Frames are always resized to the model's input size (224×224 for ViT-B/32) for embedding only. The output video is not affected.
 
+### `agglomerative`
+
+Agglomerative (Ward) clustering of the same CLIP frame embeddings into K clusters, keeping the frame nearest each
+cluster mean. With `temporal: true` (the default) only neighbouring frames may merge, so every cluster is one
+contiguous stretch of the video: a place you return to an hour later gets its own frame instead of being merged with
+the first visit, as KMeans would do. On SuperMemory-VQA it covers 89.5% of evidence spans at K=100, against 79.3% for
+KMeans and 84.6% for uniform (`hindsight.curation.frame_selectors`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `k` | `32` | Number of clusters, which is the number of output frames. |
+| `temporal` | `true` | Only time-adjacent frames may merge (contiguous clusters). `false` = plain Ward clustering. |
+| `linkage` | `"ward"` | scikit-learn `AgglomerativeClustering` linkage. |
+| `output_fps` | `1.0` | Playback fps of the keyframe video. |
+| `embed_fps`, `normalize`, `cache_dir`, `embedder` | `null` | `null` = use the `kmeans` section's value, so both methods share (and reuse) the same cached embeddings. |
+
+```bash
+python -m hindsight.video.curation in.mp4 out_agglo.mp4 --method agglomerative --set agglomerative.k=100
+```
+
+Cached embeddings are matched by video file, settings and frame indices. A re-downloaded copy of the same video has a
+new modification time, so its exact cache key differs; the curator then reuses an earlier cache file of the same video
+whose frame indices match, instead of embedding again.
+
 ---
 
 ## Outputs

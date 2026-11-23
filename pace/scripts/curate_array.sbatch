@@ -9,6 +9,8 @@
 # Then (login node, no GPU):
 #   python -m hindsight.curation.analyze --out out --results results --k-bar 100
 #
+# KS / METHODS pick the K values and methods (default "32 64 100 150" / "kmeans uniform"), e.g. the temporal
+# agglomerative run: KS=100 METHODS=agglomerative (reuses the cached CLIP embeddings).
 # Set HINDSIGHT_REPO to your clone if it isn't ~/scratch/hindsight/HindSight; SESSIONS to use another sessions file.
 # GPU: request an NVIDIA type explicitly; mi210 / r9700 are AMD and PyTorch would fall back to CPU.
 #SBATCH -J hs-curate
@@ -38,7 +40,7 @@ FAILED=0
 for ((i = SLURM_ARRAY_TASK_ID; i < N; i += STEP)); do
   echo "-- session line $i"
   python -m hindsight.curation.run_session --index "$i" --sessions "$SESSIONS" \
-    --ks 32 64 100 150 --delete-video || { echo "!! session line $i failed"; FAILED=1; }
+    --ks ${KS:-32 64 100 150} --methods ${METHODS:-kmeans uniform} --delete-video || { echo "!! session line $i failed"; FAILED=1; }
   [ -n "${STRIDE:-}" ] || break
 done
 [ $FAILED -eq 0 ] || exit 1

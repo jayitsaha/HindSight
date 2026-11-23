@@ -97,6 +97,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "batch_size": 64,
         },
     },
+    "agglomerative": {
+        "k": 32,                  # number of clusters = number of output frames
+        "temporal": True,         # only neighbouring frames may merge: every cluster is a contiguous stretch of time
+        "linkage": "ward",        # sklearn AgglomerativeClustering linkage
+        "output_fps": 1.0,
+        # embed_fps, normalize, cache_dir and embedder default to the kmeans section, so both methods share
+        # (and reuse) the same cached CLIP embeddings
+        "embed_fps": None,
+        "normalize": None,
+        "cache_dir": None,
+        "embedder": None,
+    },
 }
 
 
@@ -445,6 +457,13 @@ class FrameCurator:
             if cache_file.exists():
                 log.info("Loading cached embeddings %s", cache_file)
                 return np.load(cache_file)["emb"]
+            # The key includes the file's mtime, so a re-downloaded copy of the same video misses it. Reuse an
+            # earlier cache of the same video when its frame indices match exactly (same video, same sampling).
+            for other in sorted(Path(cache_dir).glob(f"{Path(info.path).stem}_*.npz")):
+                with np.load(other) as d:
+                    if "indices" in d and np.array_equal(d["indices"], indices):
+                        log.info("Reusing cached embeddings %s (same frames, different file key)", other)
+                        return d["emb"]
 
         if len(indices) > 20000:
             log.warning("Embedding %d frames; consider a lower embed_fps", len(indices))
@@ -506,6 +525,48 @@ class FrameCurator:
                          extra={"k": k, "n_candidates": int(len(cand)), "embed_fps": cfg.get("embed_fps"),
                                 "embedder": getattr(self._embedder, "name", str(cfg["embedder"])),
                                 "inertia": float(km.inertia_)})
+
+    @curation_method("agglomerative")
+    def _select_agglomerative(self, info: VideoInfo, cfg: dict) -> Selection:
+        """Agglomerative clustering of the frame embeddings into k clusters; keeps the frame nearest each cluster
+        mean. With temporal=True only neighbouring frames may merge (a chain connectivity graph), so each cluster
+        is one contiguous stretch of the video and a scene that comes back later gets its own frame."""
+        from scipy.sparse import diags
+        from sklearn.cluster import AgglomerativeClustering
+
+        km_cfg = self.config.get("kmeans", {})
+        pick = lambda key: cfg.get(key) if cfg.get(key) is not None else km_cfg.get(key)
+        cand = self._sample_indices(info, pick("embed_fps"))
+        emb = self.embed_frames(info, cand, pick("embedder"), pick("cache_dir"))
+        if pick("normalize") is not False:
+            emb = emb / (np.linalg.norm(emb, axis=1, keepdims=True) + 1e-12)
+
+        k = int(cfg["k"])
+        if k > len(cand):
+            log.warning("k=%d > %d candidate frames; using k=%d", k, len(cand), len(cand))
+            k = len(cand)
+        temporal = bool(cfg.get("temporal", True))
+        conn = diags([1.0, 1.0], [-1, 1], shape=(len(cand), len(cand))) if temporal and len(cand) > 1 else None
+        labels = AgglomerativeClustering(n_clusters=k, linkage=cfg.get("linkage", "ward"),
+                                         connectivity=conn).fit_predict(emb)
+        sizes = np.bincount(labels, minlength=k)
+        picks, per_frame = [], []
+        for c in range(k):
+            members = np.where(labels == c)[0]
+            if members.size == 0:
+                continue
+            d = np.linalg.norm(emb[members] - emb[members].mean(0), axis=1)
+            m = members[d.argmin()]
+            picks.append(int(cand[m]))
+            span = cand[members] / info.fps
+            per_frame.append({"cluster": c, "cluster_size": int(sizes[c]),
+                              "cluster_t_min": round(float(span.min()), 3),
+                              "cluster_t_max": round(float(span.max()), 3),
+                              "dist_to_mean": round(float(d.min()), 4)})
+        return Selection(indices=np.array(picks), per_frame=per_frame,
+                         extra={"k": k, "n_candidates": int(len(cand)), "embed_fps": pick("embed_fps"),
+                                "temporal": temporal, "linkage": cfg.get("linkage", "ward"),
+                                "embedder": getattr(self._embedder, "name", str(pick("embedder")))})
 
 
 def _json_default(o):
