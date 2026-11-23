@@ -1,0 +1,22 @@
+{
+ "condition": "curated",
+ "backend": "hf",
+ "model_name": "google/gemma-4-E4B-it",
+ "device": "auto",
+ "max_frames": null,
+ "image_tokens": 140,
+ "data_path": null,
+ "task_category": "Object and Location Memory",
+ "subject": null,
+ "answerable_only": false,
+ "max_questions": null,
+ "curated_dir": "out",
+ "method": "kmeans",
+ "k": 100,
+ "sessions": "evidence",
+ "no_frame_labels": false,
+ "pilot_dir": null,
+ "video_dir": null,
+ "output_dir": "results/full/vlm/curated_kmeans_K100",
+ "n_questions": 924
+}

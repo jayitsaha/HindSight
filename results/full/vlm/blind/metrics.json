@@ -1,0 +1,54 @@
+{
+  "total_samples": 924,
+  "accuracy": 0.3409,
+  "score_with_partial_credit": 0.3409,
+  "abstention_accuracy": 1.0,
+  "answerable_accuracy": 0.0,
+  "hallucination_rate": 0.0,
+  "over_abstention_rate": 1.0,
+  "per_subject_accuracy": {
+    "S1": 0.269,
+    "S2": 0.3258,
+    "S3": 0.3878,
+    "S4": 0.3721,
+    "S5": 0.3625,
+    "S6": 0.3516,
+    "S7": 0.3803,
+    "S8": 0.3492,
+    "S9": 0.3966,
+    "S10": 0.3922
+  },
+  "per_category_accuracy": {
+    "Object and Location Memory": 0.3409
+  },
+  "confusion_matrix": {
+    "B": {
+      "C": 56,
+      "B": 77,
+      "A": 72,
+      "D": 55
+    },
+    "C": {
+      "C": 100,
+      "B": 50,
+      "D": 50,
+      "A": 47
+    },
+    "A": {
+      "D": 53,
+      "B": 44,
+      "A": 64,
+      "C": 33
+    },
+    "D": {
+      "D": 74,
+      "B": 48,
+      "A": 59,
+      "C": 42
+    }
+  },
+  "answerability_f1": 0.0,
+  "answerability_macro_f1": 0.2542,
+  "vague_rate": 0.0,
+  "invalid_rate": 0.0
+}

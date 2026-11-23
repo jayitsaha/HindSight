@@ -1,0 +1,34 @@
+{
+  "method": "uniform",
+  "io": {
+    "start_s": null,
+    "end_s": null,
+    "output_fps": null,
+    "resize": null,
+    "rotate": 0,
+    "overlay_timestamp": false,
+    "codec": "mp4v",
+    "reencode_h264": false,
+    "write_manifest": true
+  },
+  "uniform": {
+    "fps": 1.0
+  },
+  "kmeans": {
+    "k": 32,
+    "embed_fps": null,
+    "algorithm": "kmeans",
+    "n_init": 3,
+    "random_state": 0,
+    "normalize": true,
+    "output_fps": 1.0,
+    "cache_dir": null,
+    "embedder": {
+      "backend": "open_clip",
+      "model": "ViT-B-32",
+      "pretrained": "laion2b_s34b_b79k",
+      "device": "auto",
+      "batch_size": 64
+    }
+  }
+}

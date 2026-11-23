@@ -117,3 +117,223 @@ scp GTUSER@login-ice.pace.gatech.edu:~/scratch/hindsight/runs/*/metrics.json ./r
 The app and `node_modules` stay on the laptop — PACE only runs the Python server.
 
 Never upload `.env` or AWS keys; keep secrets in `chmod 600` files read at runtime.
+
+## 7. Frame curation on SuperMemory-VQA
+
+Writes KMeans and same-size uniform keyframe videos per session for the VLM stage (guide:
+[`FRAME_CURATION.md`](FRAME_CURATION.md)). No Ego4D license needed; videos download from Hugging Face.
+
+```bash
+# once: env + Hugging Face login (videos and CLIP weights cache on scratch)
+module load anaconda3 && conda activate ~/scratch/hindsight/env
+pip install -e "$HINDSIGHT_REPO/server[curation]"      # or: export PYTHONPATH=$HINDSIGHT_REPO/server
+export HF_HOME=~/scratch/hindsight/hf && hf auth login
+
+# pick sessions, submit one array task per session (run from the work dir)
+cd ~/scratch/hindsight
+python -m hindsight.curation.make_sessions --n 30 --per-person 3 --out sessions.txt
+mkdir -p logs && sbatch --array=0-$(( $(wc -l < sessions.txt) - 1 ))%10 "$HINDSIGHT_REPO/pace/scripts/curate_array.sbatch"
+squeue --me
+
+# when done (login node, no GPU): tables + graphs
+python -m hindsight.curation.analyze --out out --results results --k-bar 100
+```
+
+`HINDSIGHT_REPO` defaults to `~/scratch/hindsight/HindSight` in the sbatch script. Outputs go to
+`out/<session>/{kmeans,uniform}_K<k>.{mp4,json}`; embeddings cache in `cache/`. Request an NVIDIA GPU type
+explicitly (`--gres=gpu:l40s:1`, `v100`, `rtx_6000`): `mi210` and `r9700` are AMD. A 15.7-min session takes
+about 135 s for KMeans (embed at 1 fps) on an L40S; reading the 1408×1408 video dominates.
+
+## 8. VLM evaluation (Gemma 4) on SuperMemory-VQA
+
+Answers Object & Location Memory questions from curated frames (guide: [`VLM_PIPELINE.md`](VLM_PIPELINE.md)).
+Gemma 4 needs Transformers 5, so it gets its own env, separate from the curation env.
+
+```bash
+# once: Gemma 4 env on scratch (CUDA 12.8 wheel; needs an NVIDIA GPU at run time)
+module load anaconda3
+export HF_HOME=~/scratch/hindsight/hf CONDA_PKGS_DIRS=~/scratch/hindsight/conda_pkgs PIP_CACHE_DIR=~/scratch/hindsight/pip_cache
+conda create --prefix ~/scratch/hindsight/env-gemma4 python=3.11 pip -y
+source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate ~/scratch/hindsight/env-gemma4
+export PYTHONNOUSERSITE=1
+pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+pip install "transformers>=5" accelerate av pillow pydantic opencv-python-headless huggingface_hub
+python -c 'from transformers import AutoProcessor, AutoModelForMultimodalLM; print("Gemma 4 imports OK")'
+
+# accept the model terms on huggingface.co while signed in, then download from the login node (~20 GB)
+hf auth login && hf download google/gemma-4-E4B-it
+
+# smoke test (synthetic video -> answer)
+HINDSIGHT_ENV=~/scratch/hindsight/env-gemma4 bash "$HINDSIGHT_REPO/pace/scripts/submit_vlm_smoke.sh" google/gemma-4-E4B-it
+
+# curated frames vs blind control (from the work dir); curated videos come from the HF dataset or out/
+cd ~/scratch/hindsight && mkdir -p logs
+CUR=hf:hindsight-cs7641/hindsight-curated-frames
+for M in kmeans uniform; do
+  sbatch "$HINDSIGHT_REPO/pace/scripts/vlm_eval.sbatch" --condition curated --curated-dir $CUR --method $M --k 100 --image-tokens 140
+done
+sbatch "$HINDSIGHT_REPO/pace/scripts/vlm_eval.sbatch" --condition blind --curated-dir $CUR --method kmeans --k 100
+python -m hindsight.evaluation.compare results/vlm/curated_kmeans_K100 results/vlm/curated_uniform_K100 results/vlm/blind
+
+# Veer's oracle pilot (40 Person_1 questions, frames cut around the evidence)
+HINDSIGHT_ENV=~/scratch/hindsight/env-gemma4 bash "$HINDSIGHT_REPO/pace/scripts/submit_pilot.sh"
+```
+
+On the 30 curated sessions, 600 questions qualify (455 answerable, 145 unanswerable), with up to 200 frames per
+question at K=100 (questions whose evidence spans two sessions). Gemma 4 E4B in bf16 is ~18 GB plus frames, so an
+L40S (48 GB) is enough. The first question logs `N frames -> T tokens`: check that T moves with `--image-tokens`.
+Keep the older SmolVLM env (`transformers==4.52.4`, `datasets==4.8.5`, CUDA 12.1 torch 2.5.1) separate if you still
+need it; Transformers 4 and 5 do not mix.
+
+## 9. Whole dataset in one go
+
+`pace/scripts/run_full_pipeline.sh` runs on the login node, from the work dir that holds `out/`. It checks the
+envs, the model cache and the questions file, then queues a chain of jobs:
+
+1. **Curation:** an array job over every session an Object & Location question needs that isn't already in `out/`.
+2. **Gemma 4:** curated KMeans, curated uniform and blind runs on every question whose sessions are curated. Each
+   run gets a continuation job that resumes if the first one hits the 8 h limit.
+3. **Finalize:** coverage over all sessions plus the VLM comparison, written to `results/full/SUMMARY.md`.
+
+```bash
+cd ~/scratch/hindsight
+DRY_RUN=1 bash "$HINDSIGHT_REPO/pace/scripts/run_full_pipeline.sh"   # pre-flight + print the sbatch commands
+bash "$HINDSIGHT_REPO/pace/scripts/run_full_pipeline.sh"             # queue everything
+cat results/full/SUMMARY.md                                          # when it is done
+```
+
+Each step starts `afterany` the previous one, so one failed session doesn't block the rest. Running the script again
+skips finished sessions, finished K values and answered questions. ICE caps how many jobs a user can have
+submitted, and every array task counts. So curation uses 10 array tasks that each work through about 1/10 of the
+sessions (`CUR_TASKS`), and the whole chain is 17 jobs. The script refuses to submit while `hs-*` jobs from an
+earlier run are still queued (`FORCE=1` overrides). Settings (`KS`, `VLM_KS`, `IMAGE_TOKENS`,
+`CURATION_ENV`, `HINDSIGHT_ENV`, `MODEL`) are listed at the top of the script. One answer-evidence session isn't in
+the dataset repo, so the few questions that need it are never scored; the script prints its name.
+
+## 10. Abstention classifier (supervised, on Gemma's option log-probs)
+
+From the work dir of section 9 (it needs `out/`):
+
+```bash
+cd ~/scratch/hindsight && bash "$HINDSIGHT_REPO/pace/scripts/submit_abstention.sh"
+```
+
+Three Gemma jobs (curated KMeans, curated uniform, blind; K=100, the same settings as the full run) write
+`results/full/vlm/*_lp`, then `abstention.sbatch` trains and evaluates the classifier on all three. 4 jobs in all.
+A few minutes after the Gemma jobs start, `grep 'first option log-probs' logs/hs-lp-kmeans-*` should print a dict like
+`{'A': -2.1, 'B': -0.3, ...}`. A `WARNING: no option log-probs` line instead means the letter could not be located, so
+cancel and report it. Result: `results/full/abstention/ABSTENTION.md`; method in
+[VLM_PIPELINE.md](VLM_PIPELINE.md#abstention-classifier-hindsightevaluationabstention-supervised).
+
+
+## 11. Question-grounded retrieval recall (phase 1, CPU only)
+
+How often do the X windows that CLIP picks for a question (anchor ± W s, on the cached 1-fps embeddings) contain
+the answer evidence? Run it as a CPU job: on a login node it gets killed (it encodes ~2,600 question texts with
+CLIP's text model, which takes 15+ minutes on the single core a login node allows). From the work dir of section 9:
+
+```bash
+cd ~/scratch/hindsight && ls cache/*.npz | wc -l    # should be ~82: one embedding file per curated session
+mkdir -p logs && sbatch "$HINDSIGHT_REPO/pace/scripts/grounded.sbatch"
+tail -f logs/hs-grounded-*.out                       # progress: encoding, then one line per setting
+```
+
+16 CPUs, a few minutes. The text embeddings are saved to `results/full/grounded/text_emb.npz`, so re-runs (other X, W
+or settings, passed as extra arguments to `sbatch`) skip encoding. If `ice-cpu` is busy, any partition works, including
+a GPU one (`--device auto` then encodes on the GPU in seconds).
+
+It compares three text queries (the full question, the object phrase pulled out of it, "a photo of <object>"), searching
+all 1-fps frames or 100 uniform frames per session, over the evidence sessions (as the curated Gemma runs) or every
+earlier session of that person, for X = 1, 2, 4, 8 and W = 15, 30 s, against random anchors. Result:
+`results/full/grounded/RECALL.md` (+ `recall.json`, `recall_vs_X.png`, and `windows.jsonl`: the anchors for every
+question, input for phase 2). If `cache/` is empty the embeddings were purged; rerun curation (section 9) first.
+
+## 12. Learned retriever (supervised, CPU only)
+
+A classifier that scores "is this frame answer evidence for this question?" from CLIP relevance, its shape over
+time (smoothed, local peaks), scene change and timing features (sessions back, minutes before the question), trained
+leave-one-participant-out with the benchmark's evidence spans as labels. Logistic regression and gradient-boosted trees
+are compared with zero-shot CLIP (section 11) and random anchors on recall@X, plus frame-ranking metrics (where the
+best evidence frame ranks). Run after section 11 (it reuses its text embeddings):
+
+```bash
+cd ~/scratch/hindsight && mkdir -p logs && sbatch "$HINDSIGHT_REPO/pace/scripts/retriever.sbatch"
+tail -f logs/hs-retriever-*.out
+```
+
+4 CPUs. If `ice-cpu` has no node with 4 free CPUs, check with `sinfo -p ice-cpu -t idle,mixed -N -o "%N %C %e"`.
+Result: `results/full/retriever/RETRIEVER.md` (+ `retriever.json`, `recall_vs_X.png`, `windows_<model>.jsonl`).
+Add `--sessions prior` for the realistic setting (all earlier sessions; slower, more frames per question).
+
+## 13. Which 100 frames per session? (selector coverage, CPU only)
+
+Before any new Gemma run: does a different way of picking the 100 frames per session cover more answer evidence
+than the curated KMeans/uniform videos? Same budget (100 frames per evidence session) and the same coverage rule as
+section 7 (a kept frame inside the evidence span ± 2 s, recorded before the question). Compared: uniform and KMeans
+(the curated frames themselves, read from `out/`), random, agglomerative clustering (Ward) and its temporal version
+(only neighbouring frames merge, so each cluster is a contiguous stretch), the question's top zero-shot CLIP frames,
+the learned retriever's top frames (logistic regression and gradient-boosted trees, leave-one-participant-out) and
+50/50 mixes of KMeans with CLIP or the trees. Run after section 11 (it reuses its text embeddings):
+
+```bash
+cd ~/scratch/hindsight && mkdir -p logs && sbatch "$HINDSIGHT_REPO/pace/scripts/selectors.sbatch"
+tail -f logs/hs-selectors-*.out
+```
+
+Result: `results/full/selectors/SELECTORS.md` (+ `selectors.json` and `selections_<selector>.jsonl`, the chosen
+frames for every question, input for a Gemma run on the winning selector).
+
+## 14. Temporal agglomerative frames, then Gemma
+
+Temporal agglomerative clustering covered the most evidence of the question-agnostic selectors in section 13 (89.5% of
+spans at K=100, against 79.3% for KMeans). This curates it for every session and runs Gemma on it, with the same
+settings as the KMeans/uniform runs. From the work dir of the full run, on the login node:
+
+```bash
+cd ~/scratch/hindsight && git -C "$HINDSIGHT_REPO" pull
+bash "$HINDSIGHT_REPO/pace/scripts/submit_agglomerative.sh"          # DRY_RUN=1 first to see the sbatch commands
+squeue --me
+tail -f logs/hs-curate-agglo-*.out                                    # one block per session
+```
+
+1. **Curation** (array job, 10 tasks on L40S like the full run): each session video is downloaded again (they were
+   deleted after the first curation), `out/<video>/agglomerative_K100.mp4` + `.json` are written, and the video is
+   deleted. The CLIP embeddings come from `cache/`: the log says `Reusing cached embeddings` (the cache key of the
+   re-downloaded file differs, the frames are the same). If it says `embed` with a progress bar instead, the cache was
+   not found and the frames are embedded again (slower, still correct).
+2. **Gemma** starts when curation ends: `results/full/vlm/curated_agglomerative_K100/` (+ a continuation job that resumes
+   if it hits the 8 h limit).
+
+Compare with the earlier runs:
+
+```bash
+python -m hindsight.evaluation.compare results/full/vlm/curated_kmeans_K100 results/full/vlm/curated_uniform_K100 \
+    results/full/vlm/curated_agglomerative_K100 results/full/vlm/blind
+```
+
+## 15. Learned frame picker, then Gemma (can run alongside section 14)
+
+The learned picker (logistic regression, section 13) covered 89.8% of evidence spans with 100 frames per session,
+but it picks a different frame set for every question, so its frames are cut per question instead of written as one
+video per session. From the work dir of the full run, on the login node:
+
+```bash
+cd ~/scratch/hindsight && git -C "$HINDSIGHT_REPO" pull
+DRY_RUN=1 bash "$HINDSIGHT_REPO/pace/scripts/submit_selected.sh"     # check the sbatch commands
+bash "$HINDSIGHT_REPO/pace/scripts/submit_selected.sh"
+tail -f logs/hs-cut-*.out                                           # one line per session video
+```
+
+1. **Cut** (CPU array, 3 tasks): every needed session video is downloaded into `data_selected/` (separate from the
+   agglomerative job's `data/`, so the two never delete each other's files), each question's frames are written to
+   `selected/logreg_top/frames/<video>/<ms>.jpg` styled like the curated videos (448×448, time in the corner), and the
+   video is deleted. A few GB of JPEGs in total; re-running skips frames already cut.
+2. **Gemma** starts when cutting ends: `--condition selected --selected-dir selected/logreg_top`, labelled and ordered
+   exactly like the curated runs -> `results/full/vlm/selected_logreg_top/`.
+
+`SELECTOR=hgb_top` (or any other `selections_*.jsonl` from section 13) runs a different picker. Compare all runs:
+
+```bash
+python -m hindsight.evaluation.compare results/full/vlm/curated_kmeans_K100 results/full/vlm/curated_uniform_K100 \
+    results/full/vlm/curated_agglomerative_K100 results/full/vlm/selected_logreg_top results/full/vlm/blind
+```
