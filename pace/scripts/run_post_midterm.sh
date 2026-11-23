@@ -92,13 +92,18 @@ echo "== subset: $(wc -l < "$SESSIONS") sessions in $SESSIONS (<= $PER per parti
 conda deactivate
 mkdir -p logs results/post_midterm
 
-EXP=(--export=ALL,HINDSIGHT_REPO="$REPO",HINDSIGHT_ENV="$CURATION_ENV")
+# Pass settings through the environment + a plain --export=ALL, NOT inline VAR=VAL: KS holds
+# spaces ("32 64 100 150") and a space inside an --export value is parsed inconsistently across
+# Slurm versions. Exported env vars propagate cleanly (spaces and all) under --export=ALL.
+export HINDSIGHT_REPO="$REPO" HINDSIGHT_ENV="$CURATION_ENV"
+export SESSIONS N PER KS SCORER_MODEL
+[ -n "${KEEP_VIDEO:-}" ] && export KEEP_VIDEO
+EXP=(--export=ALL)
 
 # ---------------------------------------------------------------- 1 + 2: subset runs, in parallel
-COMMON="HINDSIGHT_REPO=$REPO,HINDSIGHT_ENV=$CURATION_ENV,SESSIONS=$SESSIONS,N=$N,PER=$PER${KEEP_VIDEO:+,KEEP_VIDEO=$KEEP_VIDEO}"
-T_ID=$(submit --export=ALL,"$COMMON",KS="$KS" "$S/temporal_coverage.sbatch")
+T_ID=$(submit "${EXP[@]}" "$S/temporal_coverage.sbatch")
 echo "== [1] temporal coverage -> job $T_ID"
-F_ID=$(submit --export=ALL,"$COMMON",SCORER_MODEL="$SCORER_MODEL" "$S/frame_scorer.sbatch")
+F_ID=$(submit "${EXP[@]}" "$S/frame_scorer.sbatch")
 echo "== [2] frame scorer ($SCORER_MODEL) -> job $F_ID"
 
 # ---------------------------------------------------------------- 3: stacking, needs the _lp Gemma runs
