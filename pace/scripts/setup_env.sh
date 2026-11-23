@@ -38,10 +38,19 @@ fi
 conda activate "$CURATION_ENV"
 
 python -m pip install --upgrade pip
-echo "== installing CPU torch from $TORCH_INDEX"
-python -m pip install torch --index-url "$TORCH_INDEX"
+# torch AND torchvision from the SAME index so their compiled ops match — open_clip imports
+# torchvision.ops.nms, and a torchvision pulled from PyPI (built against a different torch) fails
+# with "operator torchvision::nms does not exist". Pre-installing it here means the curation
+# extras below see it already satisfied and don't swap in a mismatched build from PyPI.
+echo "== installing matched torch + torchvision from $TORCH_INDEX"
+python -m pip install torch torchvision --index-url "$TORCH_INDEX"
 echo "== installing hindsight[curation] (editable)"
 python -m pip install -e "$REPO/server[curation]"
+# guard: if a dependency resolution still swapped torchvision for a mismatched PyPI build, pin it back
+python -c "import torchvision" 2>/dev/null || {
+  echo "== torchvision mismatch after extras; reinstalling the matched pair"
+  python -m pip install --force-reinstall torch torchvision --index-url "$TORCH_INDEX"
+}
 
 echo "== verifying imports"
 PYTHONPATH="$REPO/server" python - <<'PY'
