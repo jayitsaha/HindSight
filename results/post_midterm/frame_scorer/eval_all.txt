@@ -1,0 +1,56 @@
+session allowlist: embedding 25 of 83 candidate sessions (57 in-repo sessions outside the allowlist are skipped)
+1 of 83 candidate video_ids have no path in video_paths() and are skipped: Person_1_session_2_01312026_glasses_1275
+
+=== model=logreg  class_weight=balanced  n=804551  positive_rate=0.0040 ===
+participant            n     pos      base    cosine    scorer
+1                 221274     357    0.0016    0.0028    0.0017
+10                 29655     275    0.0093    0.0086    0.0087
+2                 178703     621    0.0035    0.0058    0.0046
+3                  29860     231    0.0077    0.0073    0.0121
+4                  73620     367    0.0050    0.0089    0.0053
+5                  72079     392    0.0054    0.0081    0.0059
+6                  84140     355    0.0042    0.0065    0.0048
+7                  43000     198    0.0046    0.0078    0.0070
+8                  39120     254    0.0065    0.0592    0.0127
+9                  33100     183    0.0055    0.0122    0.0090
+MEAN AP                             0.0053    0.0127    0.0072
+MEDIAN AP                                     0.0080    0.0064
+scorer beats cosine on 2/10 participants
+
+=== model=gbm  class_weight=None  n=804551  positive_rate=0.0040 ===
+participant            n     pos      base    cosine    scorer
+1                 221274     357    0.0016    0.0028    0.0020
+10                 29655     275    0.0093    0.0086    0.0150
+2                 178703     621    0.0035    0.0058    0.0065
+3                  29860     231    0.0077    0.0073    0.0121
+4                  73620     367    0.0050    0.0089    0.0058
+5                  72079     392    0.0054    0.0081    0.0056
+6                  84140     355    0.0042    0.0065    0.0097
+7                  43000     198    0.0046    0.0078    0.0140
+8                  39120     254    0.0065    0.0592    0.0087
+9                  33100     183    0.0055    0.0122    0.0075
+MEAN AP                             0.0053    0.0127    0.0087
+MEDIAN AP                                     0.0080    0.0081
+scorer beats cosine on 5/10 participants
+
+=== model=mlp  class_weight=None  n=804551  positive_rate=0.0040 ===
+participant            n     pos      base    cosine    scorer
+1                 221274     357    0.0016    0.0028    0.0029
+10                 29655     275    0.0093    0.0086    0.0204
+2                 178703     621    0.0035    0.0058    0.0078
+3                  29860     231    0.0077    0.0073    0.0106
+4                  73620     367    0.0050    0.0089    0.0066
+5                  72079     392    0.0054    0.0081    0.0115
+6                  84140     355    0.0042    0.0065    0.0088
+7                  43000     198    0.0046    0.0078    0.0176
+8                  39120     254    0.0065    0.0592    0.0150
+9                  33100     183    0.0055    0.0122    0.0118
+MEAN AP                             0.0053    0.0127    0.0113
+MEDIAN AP                                     0.0080    0.0110
+scorer beats cosine on 7/10 participants
+
+=== summary (mean / median AP; cosine baseline shared) ===
+zero-shot cosine          0.0127    0.0080   (mean / median)
+logreg                    0.0072    0.0064   beats cosine 2/10
+gbm                       0.0087    0.0081   beats cosine 5/10
+mlp                       0.0113    0.0110   beats cosine 7/10

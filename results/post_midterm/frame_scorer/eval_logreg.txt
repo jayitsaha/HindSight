@@ -1,0 +1,15 @@
+session allowlist: embedding 25 of 83 candidate sessions (57 in-repo sessions outside the allowlist are skipped)
+1 of 83 candidate video_ids have no path in video_paths() and are skipped: Person_1_session_2_01312026_glasses_1275
+model=logreg  n=804551  positive_rate=0.0040
+participant            n     pos      base    cosine    scorer
+1                 221274     357    0.0016    0.0028    0.0020
+10                 29655     275    0.0093    0.0086    0.0121
+2                 178703     621    0.0035    0.0058    0.0064
+3                  29860     231    0.0077    0.0073    0.0121
+4                  73620     367    0.0050    0.0089    0.0062
+5                  72079     392    0.0054    0.0081    0.0087
+6                  84140     355    0.0042    0.0065    0.0089
+7                  43000     198    0.0046    0.0078    0.0100
+8                  39120     254    0.0065    0.0592    0.0257
+9                  33100     183    0.0055    0.0122    0.0111
+MEAN AP                             0.0053    0.0127    0.0103
