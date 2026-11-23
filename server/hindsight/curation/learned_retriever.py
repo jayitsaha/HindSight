@@ -161,18 +161,13 @@ def evidence_rank_pct(score: np.ndarray, y: np.ndarray) -> Optional[float]:
     return 100.0 * rank / max(len(score) - 1, 1)
 
 
-# ---------------------------------------------------------------------------------------- experiment
-def run(questions: List[dict], videos: Dict[str, dict], qemb_by_text: Dict[str, np.ndarray], starts: Dict[str, float],
-        sessions: str = "evidence", models: Sequence[str] = MODELS, xs: Sequence[int] = (1, 2, 4, 8),
-        ws: Sequence[float] = (15, 30), min_gap: float = 60, tol: float = 2.0, product_dims: int = 16,
-        n_hard: int = 100, n_random: int = 200, n_random_anchor_seeds: int = 5, seed: int = 0, log=print):
-    rng = np.random.default_rng(seed)
+def build_data(questions: List[dict], videos: Dict[str, dict], qemb_by_text: Dict[str, np.ndarray],
+               starts: Dict[str, float], sessions: str = "evidence", tol: float = 2.0):
+    """Features for every question: {qid: (X, prod, y, vids, ts)} and {qid: person}."""
     first_start: Dict[str, float] = {}
     for v, s in starts.items():
         p = gr.person_of(v)
         first_start[p] = min(first_start.get(p, s), s)
-
-    t0 = time.time()
     data, people = {}, {}
     for q in questions:
         cands = gr.candidates(q, videos, gr.sessions_for(q, videos, sessions), "all")
@@ -182,14 +177,18 @@ def run(questions: List[dict], videos: Dict[str, dict], qemb_by_text: Dict[str, 
         if d is not None:
             data[q["qid"]] = d
             people[q["qid"]] = gr.person_of(q["primary"])
-    log(f"features for {len(data)} questions ({time.time() - t0:.0f}s)")
+    return data, people
 
-    qbyid = {q["qid"]: q for q in questions}
-    ans = [q["qid"] for q in questions if q["answerable"] and q["qid"] in data]
+
+def lopo_scores(data, people, ans: Sequence[str], models: Sequence[str] = MODELS, product_dims: int = 16,
+                n_hard: int = 100, n_random: int = 200, rng=None, seed: int = 0, log=print):
+    """Leave-one-participant-out frame scores {model: {qid: scores}} (every question of a person is scored by a
+    model trained on the other people's answerable questions) and the logistic-regression coefficients per fold."""
+    rng = rng if rng is not None else np.random.default_rng(seed)
+    t0 = time.time()
     scores: Dict[str, Dict[str, np.ndarray]] = {m: {} for m in models}
     coefs = []
-    persons = sorted(set(people.values()))
-    for p in persons:
+    for p in sorted(set(people.values())):
         test = [qid for qid in data if people[qid] == p]
         train = [qid for qid in ans if people[qid] != p]
         rows = {qid: training_rows(data[qid], n_hard, n_random, rng) for qid in train}
@@ -212,6 +211,21 @@ def run(questions: List[dict], videos: Dict[str, dict], qemb_by_text: Dict[str, 
                 scores[m][qid] = model.predict_proba(X)[:, 1]
         log(f"  fold {p}: trained on {len(train)} questions ({len(ytr)} frames, {int(ytr.sum())} evidence), "
             f"scored {len(test)} ({time.time() - t0:.0f}s)")
+    return scores, coefs
+
+
+# ---------------------------------------------------------------------------------------- experiment
+def run(questions: List[dict], videos: Dict[str, dict], qemb_by_text: Dict[str, np.ndarray], starts: Dict[str, float],
+        sessions: str = "evidence", models: Sequence[str] = MODELS, xs: Sequence[int] = (1, 2, 4, 8),
+        ws: Sequence[float] = (15, 30), min_gap: float = 60, tol: float = 2.0, product_dims: int = 16,
+        n_hard: int = 100, n_random: int = 200, n_random_anchor_seeds: int = 5, seed: int = 0, log=print):
+    rng = np.random.default_rng(seed)
+    t0 = time.time()
+    data, people = build_data(questions, videos, qemb_by_text, starts, sessions, tol)
+    log(f"features for {len(data)} questions ({time.time() - t0:.0f}s)")
+    qbyid = {q["qid"]: q for q in questions}
+    ans = [q["qid"] for q in questions if q["answerable"] and q["qid"] in data]
+    scores, coefs = lopo_scores(data, people, ans, models, product_dims, n_hard, n_random, rng, seed, log)
 
     def anchors_from(qid, score):
         _, _, _, vids, ts = data[qid]
@@ -250,7 +264,8 @@ def run(questions: List[dict], videos: Dict[str, dict], qemb_by_text: Dict[str, 
                                      auc=round(float(roc_auc_score(ally, alls)), 3),
                                      median_evidence_rank_pct=round(float(np.median(ranks)), 1),
                                      evidence_in_top5pct=round(100 * float(np.mean(np.array(ranks) <= 5)), 1))
-    info = dict(questions=len(questions), scored=len(data), answerable=len(ans), sessions=sessions, folds=len(persons),
+    info = dict(questions=len(questions), scored=len(data), answerable=len(ans), sessions=sessions,
+                folds=len(set(people.values())),
                 product_dims=product_dims, n_hard=n_hard, n_random=n_random, min_gap=min_gap, tol=tol,
                 evidence_frame_share=round(100 * float(np.mean(np.concatenate([data[q][2] for q in ans]))), 2),
                 median_frames=int(np.median([len(data[q][2]) for q in data])))

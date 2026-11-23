@@ -264,3 +264,21 @@ tail -f logs/hs-retriever-*.out
 4 CPUs. If `ice-cpu` has no node with 4 free CPUs, check with `sinfo -p ice-cpu -t idle,mixed -N -o "%N %C %e"`.
 Result: `results/full/retriever/RETRIEVER.md` (+ `retriever.json`, `recall_vs_X.png`, `windows_<model>.jsonl`).
 Add `--sessions prior` for the realistic setting (all earlier sessions; slower, more frames per question).
+
+## 13. Which 100 frames per session? (selector coverage, CPU only)
+
+Before any new Gemma run: does a different way of picking the 100 frames per session cover more answer evidence
+than the curated KMeans/uniform videos? Same budget (100 frames per evidence session) and the same coverage rule as
+section 7 (a kept frame inside the evidence span ± 2 s, recorded before the question). Compared: uniform and KMeans
+(the curated frames themselves, read from `out/`), random, agglomerative clustering (Ward) and its temporal version
+(only neighbouring frames merge, so each cluster is a contiguous stretch), the question's top zero-shot CLIP frames,
+the learned retriever's top frames (logistic regression and gradient-boosted trees, leave-one-participant-out) and
+50/50 mixes of KMeans with CLIP or the trees. Run after section 11 (it reuses its text embeddings):
+
+```bash
+cd ~/scratch/hindsight && mkdir -p logs && sbatch "$HINDSIGHT_REPO/pace/scripts/selectors.sbatch"
+tail -f logs/hs-selectors-*.out
+```
+
+Result: `results/full/selectors/SELECTORS.md` (+ `selectors.json` and `selections_<selector>.jsonl`, the chosen
+frames for every question, input for a Gemma run on the winning selector).
