@@ -116,3 +116,41 @@ class CuratedFrames:
 def filter_questions(questions: Sequence[QuestionRecord], cf: CuratedFrames) -> List[QuestionRecord]:
     """Questions whose sessions are all in the curated set (the rest cannot be answered from it)."""
     return [q for q in questions if cf.covers(q)]
+
+
+class SelectedFrames:
+    """Per-question frames cut by hindsight.evaluation.prepare_selected (e.g. the learned frame picker):
+
+        <root>/selections.jsonl            {"qid": ..., "frames": [[video_id, t_sec], ...]} per question
+        <root>/frames/<video_id>/<ms>.jpg  the frames, styled like the curated videos
+
+    frames_for() returns the same labelled, time-ordered frames as CuratedFrames, so runs are comparable."""
+
+    def __init__(self, root: str, label_frames: bool = True):
+        self.root, self.label_frames = root, label_frames
+        self.selections: Dict[str, List[Tuple[str, float]]] = {}
+        path = os.path.join(root, "selections.jsonl")
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"No selections.jsonl in {root} (run hindsight.evaluation.prepare_selected)")
+        with open(path) as f:
+            for line in f:
+                if line.strip():
+                    r = json.loads(line)
+                    self.selections[str(r["qid"])] = [(v, float(t)) for v, t in r["frames"]]
+
+    def _path(self, vid: str, t: float) -> str:
+        return os.path.join(self.root, "frames", vid, f"{int(round(t * 1000))}.jpg")
+
+    def covers(self, q: QuestionRecord) -> bool:
+        sel = self.selections.get(str(q.question_id))
+        return bool(sel) and all(os.path.isfile(self._path(v, t)) for v, t in sel)
+
+    def frames_for(self, q: QuestionRecord) -> List[Tuple[Optional[str], Image.Image]]:
+        out = []
+        for vid, t in sorted(self.selections.get(str(q.question_id), []), key=lambda f: (session_number(f[0]), f[1])):
+            cut = q.cutoff_timestamp if (vid == q.video_id and q.cutoff_timestamp is not None) else float("inf")
+            if t <= cut:
+                label = f"[session {session_number(vid)}, {fmt_time(t)}]" if self.label_frames else None
+                with Image.open(self._path(vid, t)) as im:
+                    out.append((label, im.convert("RGB")))
+        return out

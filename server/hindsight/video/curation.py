@@ -187,6 +187,15 @@ def iter_frames(path: str, indices: Sequence[int]) -> Iterator[Tuple[int, np.nda
         cap.release()
 
 
+def draw_timestamp(frame: np.ndarray, t_sec: float) -> np.ndarray:
+    """Draw the source time (white on a black outline) in the top-left corner, in place."""
+    txt = fmt_ts(t_sec)
+    scale = max(0.5, frame.shape[0] / 720)
+    cv2.putText(frame, txt, (10, int(30 * scale)), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), int(4 * scale))
+    cv2.putText(frame, txt, (10, int(30 * scale)), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), max(1, int(2 * scale)))
+    return frame
+
+
 def rotate_frame(frame: np.ndarray, deg: int) -> np.ndarray:
     deg = int(deg) % 360
     if deg == 0:
@@ -413,10 +422,7 @@ class FrameCurator:
             if io.get("resize"):
                 frame = cv2.resize(frame, tuple(int(v) for v in io["resize"]), interpolation=cv2.INTER_AREA)
             if io.get("overlay_timestamp"):
-                txt = fmt_ts(fi / info.fps)
-                scale = max(0.5, frame.shape[0] / 720)
-                cv2.putText(frame, txt, (10, int(30 * scale)), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), int(4 * scale))
-                cv2.putText(frame, txt, (10, int(30 * scale)), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), max(1, int(2 * scale)))
+                draw_timestamp(frame, fi / info.fps)
             if writer is None:
                 h, w = frame.shape[:2]
                 writer = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*io.get("codec", "mp4v")), fps, (w, h))

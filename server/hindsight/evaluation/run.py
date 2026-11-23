@@ -5,6 +5,8 @@
 Conditions (what the model sees):
   curated  K frames chosen by frame curation (uniform or CLIP+KMeans) from the evidence sessions
            --curated-dir out|hf:<repo> --method kmeans|uniform --k 100 [--sessions evidence|primary]
+  selected per-question frames (e.g. the learned frame picker)  --selected-dir selected/logreg_top
+           (prepare_selected.py); labelled and ordered like curated
   oracle   frames cut around the answer-evidence span        --pilot-dir pilot   (prepare_pilot.py)
   blind    no frames (text-only control for option priors)    with --pilot-dir or --curated-dir to use
            the same questions as the oracle / curated run
@@ -24,7 +26,7 @@ from hindsight.data.supermemory import REPO_ID
 from hindsight.vlm.pipeline import VLMPipeline
 from hindsight.evaluation.evaluator import Evaluator
 
-CONDITIONS = ("curated", "oracle", "blind", "video")
+CONDITIONS = ("curated", "selected", "oracle", "blind", "video")
 
 
 def default_qa_path() -> str:
@@ -55,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sessions", default="evidence", choices=["evidence", "primary"],
                    help="curated: sessions shown per question")
     p.add_argument("--no-frame-labels", action="store_true", help="curated: do not label frames with session/time")
+    p.add_argument("--selected-dir", default=None,
+                   help="selected: per-question frames from hindsight.evaluation.prepare_selected")
     p.add_argument("--pilot-dir", default=None, help="from python -m hindsight.evaluation.prepare_pilot")
     p.add_argument("--video-dir", default=None, help="video condition: folder of <video_id>.mp4")
     p.add_argument("--output-dir", default=None)
@@ -65,6 +69,8 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.condition == "curated" and not args.curated_dir:
         raise SystemExit("--condition curated needs --curated-dir")
+    if args.condition == "selected" and not args.selected_dir:
+        raise SystemExit("--condition selected needs --selected-dir")
     if args.condition == "oracle" and not args.pilot_dir:
         raise SystemExit("--condition oracle needs --pilot-dir")
     if args.condition == "video" and not args.video_dir:
@@ -73,7 +79,8 @@ def main(argv=None):
     max_frames = args.max_frames if args.max_frames is not None else (16 if args.condition == "video" else None)
     vlm_config = VLMConfig(backend=args.backend, model_name=args.model_name, device=args.device,
                            max_frames=max_frames, image_token_budget=args.image_tokens)
-    tag = args.condition + (f"_{args.method}_K{args.k}" if args.condition == "curated" else "")
+    tag = args.condition + (f"_{args.method}_K{args.k}" if args.condition == "curated" else
+                            f"_{os.path.basename(os.path.normpath(args.selected_dir))}" if args.condition == "selected" else "")
     out_dir = args.output_dir or os.path.join("results", "vlm", tag)
 
     manifest = None
@@ -98,6 +105,12 @@ def main(argv=None):
         questions = filter_questions(questions, cf)
         print(f"[RunEval] Curated {args.method} K={args.k}: {len(cf.video_ids)} sessions; "
               f"{len(questions)}/{n_all} questions have all their sessions curated")
+    if args.condition == "selected":
+        from hindsight.evaluation.curated import SelectedFrames
+        sf = SelectedFrames(args.selected_dir, label_frames=not args.no_frame_labels)
+        n_all = len(questions)
+        questions = [q for q in questions if sf.covers(q)]
+        print(f"[RunEval] Selected frames from {args.selected_dir}: {len(questions)}/{n_all} questions have all their frames")
     if args.max_questions:
         questions = questions[: args.max_questions]
     if not questions:
@@ -110,7 +123,9 @@ def main(argv=None):
         elif args.condition == "oracle":
             visual_inputs.append([os.path.join(args.pilot_dir, r) for r in manifest["frames"][str(q.question_id)]])
         elif args.condition == "curated":
-            visual_inputs.append(functools.partial(cf.frames_for, q))    # loaded lazily, one question at a time
+            visual_inputs.append(functools.partial(cf.frames_for, q))
+        elif args.condition == "selected":
+            visual_inputs.append(functools.partial(sf.frames_for, q))    # loaded lazily, one question at a time
         else:
             visual_inputs.append(os.path.join(args.video_dir, f"{q.video_id}.mp4"))
 

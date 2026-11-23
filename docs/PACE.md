@@ -310,3 +310,30 @@ Compare with the earlier runs:
 python -m hindsight.evaluation.compare results/full/vlm/curated_kmeans_K100 results/full/vlm/curated_uniform_K100 \
     results/full/vlm/curated_agglomerative_K100 results/full/vlm/blind
 ```
+
+## 15. Learned frame picker, then Gemma (can run alongside section 14)
+
+The learned picker (logistic regression, section 13) covered 89.8% of evidence spans with 100 frames per session,
+but it picks a different frame set for every question, so its frames are cut per question instead of written as one
+video per session. From the work dir of the full run, on the login node:
+
+```bash
+cd ~/scratch/hindsight && git -C "$HINDSIGHT_REPO" pull
+DRY_RUN=1 bash "$HINDSIGHT_REPO/pace/scripts/submit_selected.sh"     # check the sbatch commands
+bash "$HINDSIGHT_REPO/pace/scripts/submit_selected.sh"
+tail -f logs/hs-cut-*.out                                           # one line per session video
+```
+
+1. **Cut** (CPU array, 3 tasks): every needed session video is downloaded into `data_selected/` (separate from the
+   agglomerative job's `data/`, so the two never delete each other's files), each question's frames are written to
+   `selected/logreg_top/frames/<video>/<ms>.jpg` styled like the curated videos (448×448, time in the corner), and the
+   video is deleted. A few GB of JPEGs in total; re-running skips frames already cut.
+2. **Gemma** starts when cutting ends: `--condition selected --selected-dir selected/logreg_top`, labelled and ordered
+   exactly like the curated runs -> `results/full/vlm/selected_logreg_top/`.
+
+`SELECTOR=hgb_top` (or any other `selections_*.jsonl` from section 13) runs a different picker. Compare all runs:
+
+```bash
+python -m hindsight.evaluation.compare results/full/vlm/curated_kmeans_K100 results/full/vlm/curated_uniform_K100 \
+    results/full/vlm/curated_agglomerative_K100 results/full/vlm/selected_logreg_top results/full/vlm/blind
+```
