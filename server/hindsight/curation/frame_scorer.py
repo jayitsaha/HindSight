@@ -119,7 +119,8 @@ def assert_unique_subjects(questions: List[MemoryQuestion]) -> None:
         raise ValueError(f"video_ids shared across subjects (LOPO leak): {shared}")
 
 
-def build_rows(sessions_emb: EmbeddingStore, questions: List[MemoryQuestion]):
+def build_rows(sessions_emb: EmbeddingStore, questions: List[MemoryQuestion],
+               max_frames_per_session: int = 0):
     feats: List[np.ndarray] = []
     labels: List[np.ndarray] = []
     groups: List[np.ndarray] = []
@@ -139,9 +140,12 @@ def build_rows(sessions_emb: EmbeddingStore, questions: List[MemoryQuestion]):
                 emb, times = emb[keep], times[keep]
             if emb.shape[0] == 0:
                 continue
+            if max_frames_per_session and emb.shape[0] > max_frames_per_session:
+                sel = np.unique(np.linspace(0, emb.shape[0] - 1, max_frames_per_session).round().astype(int))
+                emb, times = emb[sel], times[sel]
             spans = ev.get(vid, [])
             y = np.array([int(any(s <= t <= e for s, e in spans)) for t in times], dtype=int)
-            feats.append(pair_features(emb, query_emb))
+            feats.append(pair_features(emb, query_emb).astype(np.float32))
             labels.append(y)
             groups.append(np.full(emb.shape[0], str(q.subject), dtype=object))
     if not feats:
@@ -150,8 +154,8 @@ def build_rows(sessions_emb: EmbeddingStore, questions: List[MemoryQuestion]):
 
 
 def evaluate_lopo(sessions_emb: EmbeddingStore, questions: List[MemoryQuestion],
-                  model: str = "logreg"):
-    X, y, groups = build_rows(sessions_emb, questions)
+                  model: str = "logreg", max_frames_per_session: int = 0):
+    X, y, groups = build_rows(sessions_emb, questions, max_frames_per_session)
     cos = cosine_from_features(X)
     participants = sorted(set(groups.tolist()))
     per: Dict[str, Dict[str, float]] = {}
@@ -282,6 +286,8 @@ def main(argv: Optional[List[str]] = None) -> None:
                         help="delete each session mp4 right after embedding (peak disk stays ~one video)")
         sp.add_argument("--sessions", default=None,
                         help="restrict candidate sessions to the video_ids in this sessions.txt (col 2)")
+        sp.add_argument("--max-frames-per-session", type=int, default=0,
+                        help="uniformly subsample each session's candidate frames to this many (0 = all); bounds memory")
         if name == "train":
             sp.add_argument("--out", default="frame_scorer.joblib")
     a = ap.parse_args(argv)
@@ -299,11 +305,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     store = build_real_store(questions, a.cache, a.data, a.config, a.embed_fps, a.delete_video, allow)
 
     if a.cmd == "train":
-        X, y, _ = build_rows(store, questions)
+        X, y, _ = build_rows(store, questions, a.max_frames_per_session)
         FrameScorer(a.model).fit(X, y).save(a.out)
         print(f"trained {a.model} on {len(y)} frames ({y.mean():.4f} positive); saved {a.out}")
     else:
-        _print_table(evaluate_lopo(store, questions, a.model))
+        _print_table(evaluate_lopo(store, questions, a.model, a.max_frames_per_session))
 
 
 if __name__ == "__main__":

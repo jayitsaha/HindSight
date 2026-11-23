@@ -23,8 +23,8 @@
 # `sbatch --cpus-per-task=N`. For a big speedup on the embed, add --gres=gpu:1 (the embedder is
 # device="auto", so it uses the GPU with no code change); the subset download still dominates.
 #SBATCH -J hs-scorer
-#SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=16 --mem=32G
-#SBATCH -t 4:00:00
+#SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=16 --mem=96G
+#SBATCH -t 8:00:00
 #SBATCH -o logs/%x-%j.out
 set -uo pipefail
 REPO="${HINDSIGHT_REPO:-$HOME/scratch/hindsight/HindSight}"
@@ -45,10 +45,13 @@ if [ ! -s "$SESSIONS" ]; then
 fi
 DELETE="--delete-video"; [ -n "${KEEP_VIDEO:-}" ] && DELETE=""
 
-echo "== $(hostname) at $(date): frame scorer LOPO eval (model=$MODEL, sessions=$SESSIONS)"
+MAXF="${MAX_FRAMES_PER_SESSION:-500}"
+echo "== $(hostname) at $(date): frame scorer LOPO eval (model=$MODEL, sessions=$SESSIONS, max_frames/session=$MAXF)"
 # --sessions restricts to the subset; --delete-video keeps peak disk at ~one video (~3-5 GB).
+# --max-frames-per-session uniformly subsamples each session's candidate frames so the feature
+# matrix (rows x 2048) stays in RAM; at full 1 fps over 25 sessions it was tens of GB -> OOM.
 python -m hindsight.curation.frame_scorer eval --cache cache --data data --model "$MODEL" \
-  --sessions "$SESSIONS" $DELETE \
+  --sessions "$SESSIONS" --max-frames-per-session "$MAXF" $DELETE \
   | tee "$OUT/eval_${MODEL}.txt"
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] || exit "$STATUS"
