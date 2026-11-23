@@ -34,7 +34,7 @@ conda activate "${HINDSIGHT_ENV:-$HOME/scratch/hindsight/env}"
 export HF_HOME="${HF_HOME:-$HOME/scratch/hindsight/hf}"
 export PYTHONPATH="$REPO/server${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}" MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
-MODEL="${SCORER_MODEL:-logreg}"
+MODEL="${SCORER_MODEL:-all}"              # logreg|gbm|mlp, a comma list, or 'all' (one embedding pass)
 OUT=results/post_midterm/frame_scorer
 mkdir -p "$OUT"
 
@@ -44,13 +44,13 @@ if [ ! -s "$SESSIONS" ]; then
   python -m hindsight.curation.make_sessions --n "$N" --per-person "$PER" --out "$SESSIONS"
 fi
 DELETE="--delete-video"; [ -n "${KEEP_VIDEO:-}" ] && DELETE=""
+BAL=""; [ "${BALANCED:-1}" = "1" ] && BAL="--balanced"    # class_weight=balanced by default (BALANCED=0 off)
 
 MAXF="${MAX_FRAMES_PER_SESSION:-500}"
-echo "== $(hostname) at $(date): frame scorer LOPO eval (model=$MODEL, sessions=$SESSIONS, max_frames/session=$MAXF)"
-# --sessions restricts to the subset; --delete-video keeps peak disk at ~one video (~3-5 GB).
-# --max-frames-per-session uniformly subsamples each session's candidate frames so the feature
-# matrix (rows x 2048) stays in RAM; at full 1 fps over 25 sessions it was tens of GB -> OOM.
-python -m hindsight.curation.frame_scorer eval --cache cache --data data --model "$MODEL" \
+echo "== $(hostname) at $(date): frame scorer LOPO eval (model=$MODEL $BAL, sessions=$SESSIONS, max_frames/session=$MAXF)"
+# One embedding pass trains all requested models; the vid-keyed store cache (cache/store_*.npz)
+# lets re-runs skip re-download+embed. --max-frames-per-session bounds the feature matrix RAM.
+python -m hindsight.curation.frame_scorer eval --cache cache --data data --model "$MODEL" $BAL \
   --sessions "$SESSIONS" --max-frames-per-session "$MAXF" $DELETE \
   | tee "$OUT/eval_${MODEL}.txt"
 STATUS=${PIPESTATUS[0]}
