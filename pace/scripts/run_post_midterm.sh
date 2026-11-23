@@ -31,6 +31,7 @@
 #   N / PER         subset size / max sessions per person [25 / 3]
 #   SESSIONS        shared subset list                   [sessions_post_midterm.txt]
 #   KEEP_VIDEO=1    keep each mp4 after embedding (needs ~70 GB; avoids the double download)
+#   GRES=gpu:1      run the two embed jobs on a GPU (much faster CLIP embed; GPU-queue wait)
 #   DRY_RUN=1       print the sbatch commands, submit nothing
 #   FORCE=1         submit while hs-* post-midterm jobs are still queued
 # Re-running is safe: finished sessions/K values are skipped; analyze and the evals just rerun.
@@ -99,11 +100,15 @@ export HINDSIGHT_REPO="$REPO" HINDSIGHT_ENV="$CURATION_ENV"
 export SESSIONS N PER KS SCORER_MODEL
 [ -n "${KEEP_VIDEO:-}" ] && export KEEP_VIDEO
 EXP=(--export=ALL)
+# GRES=gpu:1 moves the CLIP embed to a GPU (embedder is device="auto"); only the two embed-heavy
+# jobs take it, stacking stays CPU. Empty by default -> CPU nodes (no GPU-queue wait).
+GPU=()
+[ -n "${GRES:-}" ] && { GPU=(--gres="$GRES"); echo "== requesting --gres=$GRES for the embed jobs"; }
 
 # ---------------------------------------------------------------- 1 + 2: subset runs, in parallel
-T_ID=$(submit "${EXP[@]}" "$S/temporal_coverage.sbatch")
+T_ID=$(submit "${EXP[@]}" ${GPU[@]+"${GPU[@]}"} "$S/temporal_coverage.sbatch")
 echo "== [1] temporal coverage -> job $T_ID"
-F_ID=$(submit "${EXP[@]}" "$S/frame_scorer.sbatch")
+F_ID=$(submit "${EXP[@]}" ${GPU[@]+"${GPU[@]}"} "$S/frame_scorer.sbatch")
 echo "== [2] frame scorer ($SCORER_MODEL) -> job $F_ID"
 
 # ---------------------------------------------------------------- 3: stacking, needs the _lp Gemma runs
