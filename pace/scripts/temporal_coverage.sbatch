@@ -21,10 +21,12 @@
 # (a sessions.txt; default = a fresh make_sessions --n N subset), N [25], PER [3],
 # KEEP_VIDEO=1 (keep each mp4 after embedding, for sharing with the frame scorer; needs ~70 GB).
 #
-# CPU job: no --gres (PACE ICE CPU nodes need none). If your queue requires a partition, use
-# the same fallback as abstention.sbatch: -p ice-gpu --gres=gpu:l40s:1.
+# CPU job: no --gres (PACE ICE CPU nodes need none; this lands on a CPU compute node, not login).
+# 16 cores because CLIP embedding is matmul-heavy and thread-scaled — override with
+# `sbatch --cpus-per-task=N`. For a big speedup on the embed, add --gres=gpu:1 (the embedder is
+# device="auto", so it uses the GPU with no code change); the ~70 GB download still dominates.
 #SBATCH -J hs-temporal
-#SBATCH -N1 --ntasks-per-node=4 --mem=32G
+#SBATCH -N1 --ntasks-per-node=1 --cpus-per-task=16 --mem=32G
 #SBATCH -t 8:00:00
 #SBATCH -o logs/%x-%j.out
 set -uo pipefail
@@ -34,6 +36,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${HINDSIGHT_ENV:-$HOME/scratch/hindsight/env}"
 export HF_HOME="${HF_HOME:-$HOME/scratch/hindsight/hf}"
 export PYTHONPATH="$REPO/server${PYTHONPATH:+:$PYTHONPATH}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}" MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 KS="${KS:-32 64 100 150}"
 
 echo "== $(hostname) at $(date): temporal re-curation + coverage (K = $KS)"
