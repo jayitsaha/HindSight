@@ -1,0 +1,23 @@
+{
+ "condition": "curated",
+ "backend": "hf",
+ "model_name": "google/gemma-4-E4B-it",
+ "device": "auto",
+ "max_frames": null,
+ "image_tokens": 140,
+ "data_path": null,
+ "task_category": "Object and Location Memory",
+ "subject": null,
+ "answerable_only": false,
+ "max_questions": null,
+ "curated_dir": "out",
+ "method": "agglomerative",
+ "k": 100,
+ "sessions": "evidence",
+ "no_frame_labels": false,
+ "selected_dir": null,
+ "pilot_dir": null,
+ "video_dir": null,
+ "output_dir": "results/full/vlm/curated_agglomerative_K100",
+ "n_questions": 924
+}

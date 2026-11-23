@@ -1,0 +1,77 @@
+{
+ "info": {
+  "questions": 933,
+  "answerable": 613,
+  "spans": 677,
+  "sessions": 82,
+  "k": 100,
+  "gap": 5.0,
+  "tol": 2.0,
+  "curated_manifests": {
+   "uniform": 82,
+   "kmeans": 82
+  }
+ },
+ "rows": [
+  {
+   "selector": "uniform",
+   "span_coverage": 84.6,
+   "question_coverage": 84.7,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "kmeans",
+   "span_coverage": 79.3,
+   "question_coverage": 81.1,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "random",
+   "span_coverage": 71.2,
+   "question_coverage": 73.0,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "agglomerative",
+   "span_coverage": 82.4,
+   "question_coverage": 83.0,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "agglomerative_temporal",
+   "span_coverage": 89.5,
+   "question_coverage": 90.2,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "clip_top",
+   "span_coverage": 71.2,
+   "question_coverage": 72.6,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "logreg_top",
+   "span_coverage": 89.8,
+   "question_coverage": 90.7,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "hgb_top",
+   "span_coverage": 79.6,
+   "question_coverage": 82.1,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "kmeans+clip",
+   "span_coverage": 85.5,
+   "question_coverage": 87.3,
+   "usable_frames_median": 100
+  },
+  {
+   "selector": "kmeans+hgb",
+   "span_coverage": 83.2,
+   "question_coverage": 85.2,
+   "usable_frames_median": 100
+  }
+ ]
+}

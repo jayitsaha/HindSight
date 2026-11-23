@@ -1,0 +1,23 @@
+{
+ "condition": "selected",
+ "backend": "hf",
+ "model_name": "google/gemma-4-E4B-it",
+ "device": "auto",
+ "max_frames": null,
+ "image_tokens": 140,
+ "data_path": null,
+ "task_category": "Object and Location Memory",
+ "subject": null,
+ "answerable_only": false,
+ "max_questions": null,
+ "curated_dir": null,
+ "method": "kmeans",
+ "k": 100,
+ "sessions": "evidence",
+ "no_frame_labels": false,
+ "selected_dir": "selected/logreg_top",
+ "pilot_dir": null,
+ "video_dir": null,
+ "output_dir": "results/full/vlm/selected_logreg_top",
+ "n_questions": 921
+}
